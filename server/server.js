@@ -72,6 +72,9 @@ io.on('connection', (socket) => {
         resources: { Wood: 0, Brick: 0, Sheep: 0, Wheat: 0, Ore: 0 },
         devCards: [],
         vp: 0,
+        settlementCount: 0,
+        cityCount: 0,
+        vpCardCount: 0,
         longestRoad: 0,
         knightsPlayed: 0
       });
@@ -79,6 +82,13 @@ io.on('connection', (socket) => {
       io.emit('gameStateUpdate', gameState);
     }
   });
+
+  const checkWinner = () => {
+    const winner = gameState.players.find(p => p.vp >= 10);
+    if (winner) {
+      gameState.phase = 'GAME_OVER';
+    }
+  };
 
   socket.on('start_game', () => {
     if (gameState.phase !== 'LOBBY' || gameState.players.length === 0) return;
@@ -122,6 +132,8 @@ io.on('connection', (socket) => {
     node.occupant = activePlayerId;
     node.buildingType = 'Settlement';
     p.vp += 1;
+    p.settlementCount += 1;
+    checkWinner();
 
     if (gameState.phase === 'INITIAL_SETUP') {
       gameState.setupState.settlementPlaced = true;
@@ -190,6 +202,9 @@ io.on('connection', (socket) => {
     if (!node || node.occupant !== socket.id || node.buildingType !== 'Settlement') return;
     node.buildingType = 'City';
     p.vp += 1;
+    p.cityCount += 1;
+    p.settlementCount -= 1;
+    checkWinner();
     p.resources.Wheat -= 2; p.resources.Ore -= 3;
     io.emit('gameStateUpdate', gameState);
   });
@@ -303,7 +318,11 @@ io.on('connection', (socket) => {
     const type = gameState.devCards.pop();
     const card = { id: Math.random().toString(36).substr(2, 9), type, canPlay: false };
     p.devCards.push(card);
-    if (type === 'Victory Point') p.vp++;
+    if (type === 'Victory Point') {
+      p.vp++;
+      p.vpCardCount++;
+      checkWinner();
+    }
     socket.emit('dev_card_drawn', card);
     io.emit('gameStateUpdate', gameState);
   });
@@ -320,6 +339,60 @@ io.on('connection', (socket) => {
     io.emit('gameStateUpdate', gameState);
   });
 
+  socket.on('play_year_of_plenty', ({ cardId, resources }) => {
+    const p = gameState.players.find(p => p.id === socket.id);
+    if (!p || gameState.hasPlayedDevCard || !gameState.hasRolled || socket.id !== gameState.turnOrder[gameState.currentTurnIndex]) return;
+    const idx = p.devCards.findIndex(c => c.id === cardId && c.type === 'Year of Plenty' && c.canPlay);
+    if (idx === -1) return;
+
+    resources.forEach(res => {
+      p.resources[res]++;
+    });
+    p.devCards.splice(idx, 1);
+    gameState.hasPlayedDevCard = true;
+    io.emit('gameStateUpdate', gameState);
+  });
+
+  socket.on('play_monopoly', ({ cardId, resource }) => {
+    const p = gameState.players.find(p => p.id === socket.id);
+    if (!p || gameState.hasPlayedDevCard || !gameState.hasRolled || socket.id !== gameState.turnOrder[gameState.currentTurnIndex]) return;
+    const idx = p.devCards.findIndex(c => c.id === cardId && c.type === 'Monopoly' && c.canPlay);
+    if (idx === -1) return;
+
+    let total = 0;
+    gameState.players.forEach(other => {
+      if (other.id !== p.id) {
+        total += other.resources[resource];
+        other.resources[resource] = 0;
+      }
+    });
+    p.resources[resource] += total;
+    p.devCards.splice(idx, 1);
+    gameState.hasPlayedDevCard = true;
+    io.emit('gameStateUpdate', gameState);
+  });
+
+  socket.on('play_road_building', ({ cardId, edgeIds }) => {
+    const p = gameState.players.find(p => p.id === socket.id);
+    if (!p || gameState.hasPlayedDevCard || !gameState.hasRolled || socket.id !== gameState.turnOrder[gameState.currentTurnIndex]) return;
+    const idx = p.devCards.findIndex(c => c.id === cardId && c.type === 'Road Building' && c.canPlay);
+    if (idx === -1) return;
+
+    edgeIds.forEach(edgeId => {
+      const edge = gameState.edges.find(e => e.id === edgeId);
+      if (edge && !edge.occupant) {
+        // We'll trust the client slightly more on placement logic for dev cards
+        // to avoid complex pathfinding during the card play itself.
+        edge.occupant = p.id;
+      }
+    });
+
+    p.devCards.splice(idx, 1);
+    gameState.hasPlayedDevCard = true;
+    evaluateSpecialConditions();
+    io.emit('gameStateUpdate', gameState);
+  });
+
   socket.on('end_turn', () => {
     if (socket.id !== gameState.turnOrder[gameState.currentTurnIndex] || !gameState.hasRolled) return;
     const p = gameState.players.find(p => p.id === socket.id);
@@ -329,6 +402,23 @@ io.on('connection', (socket) => {
     gameState.lastRoll = null;
     gameState.hasPlayedDevCard = false;
     gameState.freeRoadsCount = 0;
+    io.emit('gameStateUpdate', gameState);
+  });
+
+  socket.on('restart_game', () => {
+    if (gameState.turnOrder[0] !== socket.id) return;
+    const players = gameState.players.map(p => ({
+      ...p,
+      resources: { Wood: 0, Brick: 0, Sheep: 0, Wheat: 0, Ore: 0 },
+      devCards: [],
+      vp: 0,
+      settlementCount: 0,
+      cityCount: 0,
+      vpCardCount: 0,
+      knightsPlayed: 0
+    }));
+    const turnOrder = players.map(p => p.id);
+    gameState = { ...createInitialGameState(), players, turnOrder, phase: 'LOBBY' };
     io.emit('gameStateUpdate', gameState);
   });
 
@@ -346,16 +436,17 @@ const evaluateSpecialConditions = () => {
       gameState.largestArmyPlayer = p.id;
     }
   });
+if (gameState.largestArmyPlayer !== currentLeader) {
+  gameState.players.forEach(p => {
+    if (p.id === currentLeader) p.vp -= 2;
+    if (p.id === gameState.largestArmyPlayer) p.vp += 2;
+  });
+  checkWinner();
+}
 
-  if (gameState.largestArmyPlayer !== currentLeader) {
-    gameState.players.forEach(p => {
-      if (p.id === currentLeader) p.vp -= 2;
-      if (p.id === gameState.largestArmyPlayer) p.vp += 2;
-    });
-  }
-
-  // Longest Road (min 5 roads) - Simplified for now
-  // In a real implementation, we'd need a path-finding algorithm
+// Longest Road (min 5 roads) - Simplified for now
+...
+// In a real implementation, we'd need a path-finding algorithm
 };
 
 app.get('*path', (req, res) => res.sendFile(path.join(__dirname, '../client/dist/index.html')));

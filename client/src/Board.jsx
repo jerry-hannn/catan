@@ -63,7 +63,7 @@ const renderPips = (numberToken, cx, cy) => {
   return pips;
 };
 
-const Board = ({ board, nodes, edges, players, onNodeClick, onEdgeClick, robberHexId, onHexClick }) => {
+const Board = ({ board, nodes, edges, players, onNodeClick, onEdgeClick, robberHexId, onHexClick, pendingSettlementNodeId, pendingRoadEdgeIds = [] }) => {
   if (!board || board.length === 0) return null;
 
   // Find bounding box to center the SVG
@@ -183,7 +183,8 @@ const Board = ({ board, nodes, edges, players, onNodeClick, onEdgeClick, robberH
           if (!v1 || !v2) return null;
           
           const occupantPlayer = edge.occupant && players ? players.find(p => p.id === edge.occupant) : null;
-          const isHoverable = !edge.occupant && onEdgeClick;
+          const isPending = pendingRoadEdgeIds.includes(edge.id);
+          const isHoverable = !edge.occupant && !isPending && onEdgeClick;
 
           return (
             <g key={`edge-${edge.id}`} onClick={() => onEdgeClick && onEdgeClick(edge.id)} style={{ cursor: isHoverable ? 'pointer' : 'default' }}>
@@ -196,9 +197,10 @@ const Board = ({ board, nodes, edges, players, onNodeClick, onEdgeClick, robberH
               <line 
                 x1={v1.x + offsetX} y1={v1.y + offsetY} 
                 x2={v2.x + offsetX} y2={v2.y + offsetY} 
-                stroke={occupantPlayer ? occupantPlayer.color : (isHoverable ? "rgba(255,255,255,0.3)" : "transparent")} 
-                strokeWidth={occupantPlayer ? "8" : "4"} 
+                stroke={occupantPlayer ? occupantPlayer.color : (isPending ? "rgba(255,255,255,0.5)" : (isHoverable ? "rgba(255,255,255,0.3)" : "transparent"))} 
+                strokeWidth={occupantPlayer || isPending ? "8" : "4"} 
                 strokeLinecap="round"
+                strokeDasharray={isPending ? "5,5" : "none"}
               />
             </g>
           );
@@ -209,7 +211,8 @@ const Board = ({ board, nodes, edges, players, onNodeClick, onEdgeClick, robberH
           const px = node.x + offsetX;
           const py = node.y + offsetY;
           const occupantPlayer = node.occupant && players ? players.find(p => p.id === node.occupant) : null;
-          const isHoverable = !node.occupant && onNodeClick;
+          const isPending = node.id === pendingSettlementNodeId;
+          const isHoverable = !node.occupant && !isPending && onNodeClick;
 
           return (
             <g key={`node-${node.id}`} onClick={() => onNodeClick && onNodeClick(node.id)} style={{ cursor: isHoverable ? 'pointer' : 'default' }}>
@@ -222,6 +225,12 @@ const Board = ({ board, nodes, edges, players, onNodeClick, onEdgeClick, robberH
                   fill="rgba(255,255,255,0.6)" 
                   stroke="transparent"
                 />
+              )}
+
+              {isPending && (
+                <g transform={`translate(${px - 10}, ${py - 10})`} opacity="0.5">
+                  <FaHome size={20} color="#fff" />
+                </g>
               )}
 
               {occupantPlayer && node.buildingType === 'Settlement' && (

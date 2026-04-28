@@ -16,6 +16,9 @@ function App() {
   const [buildingMode, setBuildingMode] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
 
+  const [pendingSettlement, setPendingSettlement] = useState(null);
+  const [pendingRoad, setPendingRoad] = useState(null);
+
   const [playerName, setPlayerName] = useState('');
   const [playerColor, setPlayerColor] = useState('#e63946');
   const [tradeOffer, setTradeOffer] = useState('Wood');
@@ -39,6 +42,8 @@ function App() {
 
     socket.on('gameStateUpdate', (state) => {
       setGameState(state);
+      setPendingSettlement(null);
+      setPendingRoad(null);
     });
 
     socket.on('error', (msg) => {
@@ -59,10 +64,12 @@ function App() {
   };
 
   const handleStartGame = () => socket.emit('start_game');
+  const handleRestartGame = () => socket.emit('restart_game');
   
   const handleNodeClick = (nodeId) => {
     if (gameState.phase === 'INITIAL_SETUP') {
-      socket.emit('build_settlement', { nodeId });
+      if (gameState.setupState.settlementPlaced) return;
+      setPendingSettlement(nodeId);
     } else if (buildingMode === 'SETTLEMENT') {
       socket.emit('build_settlement', { nodeId });
       setBuildingMode(null);
@@ -74,10 +81,41 @@ function App() {
 
   const handleEdgeClick = (edgeId) => {
     if (gameState.phase === 'INITIAL_SETUP') {
-      socket.emit('build_road', { edgeId });
+      if (!gameState.setupState.settlementPlaced || gameState.setupState.roadPlaced) return;
+      
+      // Client-side validation to match server
+      const edge = gameState.edges.find(e => e.id === edgeId);
+      if (edge.v1 !== gameState.setupState.lastSettlementNodeId && edge.v2 !== gameState.setupState.lastSettlementNodeId) {
+        alert("Must connect to the settlement just placed!");
+        return;
+      }
+      
+      setPendingRoad(edgeId);
+    } else if (devCardAction?.type === 'Road Building') {
+      const currentSelection = devCardAction.selection || [];
+      if (currentSelection.includes(edgeId)) {
+        setDevCardAction({ ...devCardAction, selection: currentSelection.filter(id => id !== edgeId) });
+      } else if (currentSelection.length < 2) {
+        setDevCardAction({ ...devCardAction, selection: [...currentSelection, edgeId] });
+      }
     } else if (buildingMode === 'ROAD') {
       socket.emit('build_road', { edgeId });
       setBuildingMode(null);
+    }
+  };
+
+  const handleConfirmSetup = () => {
+    if (pendingSettlement) {
+      socket.emit('build_settlement', { nodeId: pendingSettlement });
+    } else if (pendingRoad) {
+      socket.emit('build_road', { edgeId: pendingRoad });
+    }
+  };
+
+  const handleConfirmRoadBuilding = () => {
+    if (devCardAction?.type === 'Road Building' && devCardAction.selection.length === 2) {
+      socket.emit('play_road_building', { cardId: devCardAction.cardId, edgeIds: devCardAction.selection });
+      setDevCardAction(null);
     }
   };
 
@@ -131,7 +169,7 @@ function App() {
 
   // Dev Card Actions
   const handlePlayCard = (card) => {
-    if (!card.canPlay || gameState.hasPlayedDevCard) return;
+    if (!card.canPlay || gameState.hasPlayedDevCard || !gameState.hasRolled) return;
 
     if (card.type === 'Knight') {
       socket.emit('play_knight', { cardId: card.id });
@@ -140,7 +178,7 @@ function App() {
     } else if (card.type === 'Monopoly') {
       setDevCardAction({ type: 'Monopoly', cardId: card.id, selection: [] });
     } else if (card.type === 'Road Building') {
-      socket.emit('play_road_building', { cardId: card.id });
+      setDevCardAction({ type: 'Road Building', cardId: card.id, selection: [] });
     }
   };
 
@@ -181,7 +219,10 @@ function App() {
         {!player ? (
           <form onSubmit={handleJoin} className="lobby-form">
             <input type="text" placeholder="Your Name" value={playerName} onChange={e => setPlayerName(e.target.value)} required />
-            <input type="color" value={playerColor} onChange={e => setPlayerColor(e.target.value)} title="Choose your color" />
+            <div className="color-picker-container">
+              <span>Pick a color:</span>
+              <input type="color" value={playerColor} onChange={e => setPlayerColor(e.target.value)} title="Choose your color" />
+            </div>
             <button type="submit">Join Game</button>
           </form>
         ) : (
@@ -196,6 +237,52 @@ function App() {
           <h3>Players Joined ({gameState.players.length}/4)</h3>
           <ul>{gameState.players.map(p => <li key={p.id} style={{ color: p.color, fontWeight: 'bold' }}>{p.name}</li>)}</ul>
         </div>
+      </div>
+    );
+  }
+
+  if (gameState.phase === 'GAME_OVER') {
+    const sortedPlayers = [...gameState.players].sort((a, b) => b.vp - a.vp);
+    const winner = sortedPlayers[0];
+    const isHost = gameState.turnOrder[0] === playerId;
+
+    return (
+      <div className="App game-over-screen">
+        <h1 className="winner-announcement" style={{ color: winner.color }}>
+          {winner.name} Wins!
+        </h1>
+        <h2>Final Leaderboard</h2>
+        <div className="leaderboard-container">
+          <table className="vp-breakdown-table">
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th>Total VP</th>
+                <th>Settlements</th>
+                <th>Cities</th>
+                <th>Awards</th>
+                <th>Dev Cards</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedPlayers.map(p => (
+                <tr key={p.id} style={{ borderLeft: `5px solid ${p.color}` }}>
+                  <td><strong>{p.name}</strong></td>
+                  <td><strong>{p.vp}</strong></td>
+                  <td>{p.settlementCount}</td>
+                  <td>{p.cityCount}</td>
+                  <td>{p.id === gameState.largestArmyPlayer ? "Largest Army (2)" : "-"}</td>
+                  <td>{p.vpCardCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {isHost ? (
+          <button className="action-btn restart-btn" onClick={handleRestartGame}>Start New Game</button>
+        ) : (
+          <p>Waiting for host to restart...</p>
+        )}
       </div>
     );
   }
@@ -252,18 +339,23 @@ function App() {
           <h2>{player.name} {player.vp >= 10 && "(WINNER!)"}</h2>
           <div className="stats-row">
             <span>VP: {player.vp}</span>
-            <span>Knights: {player.knightsPlayed}</span>
+            <span> Knights: {player.knightsPlayed}</span>
           </div>
           
           {gameState.phase === 'INITIAL_SETUP' && (
              <div className="setup-info">
                <p className="phase-indicator"><strong>Phase: Initial Setup</strong></p>
                {isMyTurn && (
-                 <p className="instruction">
-                   {!gameState.setupState.settlementPlaced 
-                     ? "Click on an intersection to build your Settlement." 
-                     : "Now click on an adjacent edge to build your Road."}
-                 </p>
+                 <>
+                   <p className="instruction">
+                     {!gameState.setupState.settlementPlaced 
+                       ? "Click on an intersection to build your Settlement." 
+                       : "Now click on an adjacent edge to build your Road."}
+                   </p>
+                   {(pendingSettlement !== null || pendingRoad !== null) && (
+                     <button className="action-btn" onClick={handleConfirmSetup}>Confirm Placement</button>
+                   )}
+                 </>
                )}
              </div>
           )}
@@ -284,8 +376,8 @@ function App() {
                   {player.devCards.map(card => (
                     <button 
                       key={card.id} 
-                      className={`dev-card ${card.canPlay && !gameState.hasPlayedDevCard ? 'playable' : 'unplayable'}`}
-                      disabled={!card.canPlay || gameState.hasPlayedDevCard || !isMyTurn}
+                      className={`dev-card ${card.canPlay && !gameState.hasPlayedDevCard && gameState.hasRolled ? 'playable' : 'unplayable'}`}
+                      disabled={!card.canPlay || gameState.hasPlayedDevCard || !isMyTurn || !gameState.hasRolled}
                       onClick={() => handlePlayCard(card)}
                       title={card.canPlay ? `Click to play ${card.type}` : "Cannot play on the turn you bought it"}
                     >
@@ -308,10 +400,29 @@ function App() {
                 {gameState.mustMoveRobber && (
                   <p className="build-prompt">You must move the robber! Click a hex on the board.</p>
                 )}
+                {devCardAction?.type === 'Road Building' && (
+                  <div className="dev-card-prompt" style={{ marginBottom: '15px', padding: '10px', background: 'rgba(217, 119, 67, 0.1)', borderRadius: '8px' }}>
+                    <p className="build-prompt">Road Building: Click two edges on the board ({devCardAction.selection.length}/2)</p>
+                    {devCardAction.selection.length === 2 && (
+                      <button className="action-btn" onClick={handleConfirmRoadBuilding}>Confirm Road Building</button>
+                    )}
+                    <button className="purchase-btn" onClick={() => setDevCardAction(null)} style={{ marginLeft: '10px' }}>Cancel</button>
+                  </div>
+                )}
                 {gameState.phase === 'MAIN' && (
                   <>
                     <div className="main-actions">
-                      <button className="action-btn" onClick={handleRollDice} disabled={gameState.hasRolled}>Roll Dice</button>
+                      <button 
+                        className="action-btn" 
+                        onClick={handleRollDice} 
+                        disabled={gameState.hasRolled}
+                        style={{ 
+                          opacity: gameState.hasRolled ? 0.5 : 1, 
+                          transition: 'opacity 0.5s ease-in-out'
+                        }}
+                      >
+                        Roll Dice
+                      </button>
                       <button className="action-btn" onClick={handleEndTurn} disabled={!gameState.hasRolled || gameState.mustMoveRobber}>End Turn</button>
                     </div>
                     <div className="purchase-actions" style={{ opacity: (!gameState.hasRolled || gameState.mustMoveRobber) ? 0.3 : 1 }}>
@@ -335,7 +446,7 @@ function App() {
       )}
 
       {/* Interactive Overlays */}
-      {devCardAction && (
+      {devCardAction && (devCardAction.type === 'Year of Plenty' || devCardAction.type === 'Monopoly') && (
         <div className="overlay">
           <div className="overlay-content">
             <h3>{devCardAction.type === 'Year of Plenty' ? 'Pick 2 Resources' : 'Pick Resource to Steal'}</h3>
@@ -388,6 +499,8 @@ function App() {
         edges={gameState.edges} 
         players={gameState.players}
         robberHexId={gameState.robberHexId}
+        pendingSettlementNodeId={pendingSettlement}
+        pendingRoadEdgeIds={devCardAction?.type === 'Road Building' ? devCardAction.selection : (pendingRoad ? [pendingRoad] : [])}
         onNodeClick={isMyTurn && !gameState.mustMoveRobber ? handleNodeClick : null}
         onEdgeClick={isMyTurn && !gameState.mustMoveRobber ? handleEdgeClick : null}
         onHexClick={isMyTurn && gameState.mustMoveRobber ? handleHexClick : null}
