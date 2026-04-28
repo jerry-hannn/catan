@@ -22,9 +22,11 @@ function App() {
 
   const [playerName, setPlayerName] = useState('');
   const [playerColor, setPlayerColor] = useState('#e63946');
-  const [tradeOffer, setTradeOffer] = useState('Wood');
-  const [tradeRequest, setTradeRequest] = useState('Brick');
-
+  const [tradeType, setTradeType] = useState('bank'); // 'bank' or 'player'
+  const [tradeOffer, setTradeOffer] = useState('Wood'); // bank offer
+  const [tradeRequest, setTradeRequest] = useState('Brick'); // bank request
+  const [tradeOfferSelection, setTradeOfferSelection] = useState({ Wood: 0, Brick: 0, Sheep: 0, Wheat: 0, Ore: 0 });
+  const [tradeRequestSelection, setTradeRequestSelection] = useState({ Wood: 0, Brick: 0, Sheep: 0, Wheat: 0, Ore: 0 });
   const [discardSelection, setDiscardSelection] = useState({ Wood: 0, Brick: 0, Sheep: 0, Wheat: 0, Ore: 0 });
   const [robberTargetHex, setRobberTargetHex] = useState(null);
   
@@ -168,6 +170,36 @@ function App() {
     socket.emit('bank_trade', { offerResource: tradeOffer, requestResource: tradeRequest });
   };
 
+  // Player-to-Player Trade Handlers
+  const handlePlayerTradeChange = (side, res, delta) => {
+    const setter = side === 'offer' ? setTradeOfferSelection : setTradeRequestSelection;
+    const current = side === 'offer' ? tradeOfferSelection : tradeRequestSelection;
+    
+    setter(prev => {
+      const next = { ...prev };
+      next[res] += delta;
+      if (next[res] < 0) next[res] = 0;
+      if (side === 'offer' && next[res] > player.resources[res]) next[res] = player.resources[res];
+      return next;
+    });
+  };
+
+  const handleProposeTrade = () => {
+    socket.emit('propose_trade', { offer: tradeOfferSelection, request: tradeRequestSelection });
+  };
+
+  const handleRespondToTrade = (accepted) => {
+    socket.emit('respond_to_trade', { accepted });
+  };
+
+  const handleConfirmTrade = (responderId) => {
+    socket.emit('confirm_trade', { responderId });
+  };
+
+  const handleCancelTrade = () => {
+    socket.emit('cancel_trade');
+  };
+
   // Dev Card Actions
   const handlePlayCard = (card) => {
     if (!card.canPlay || gameState.hasPlayedDevCard || !gameState.hasRolled) return;
@@ -212,6 +244,14 @@ function App() {
   }
 
   const player = gameState.players.find(p => p.id === playerId);
+  
+  const isTradeProposer = gameState.tradeProposal?.proposerId === playerId;
+  const canAcceptTrade = gameState.tradeProposal && !isTradeProposer && player && (() => {
+    for (const res in gameState.tradeProposal.request) {
+      if (player.resources[res] < gameState.tradeProposal.request[res]) return false;
+    }
+    return true;
+  })();
 
   if (gameState.phase === 'LOBBY') {
     return (
@@ -466,20 +506,81 @@ function App() {
 
         {activeModal === 'trade' && (
           <div className="overlay" onClick={() => setActiveModal(null)}>
-            <div className="overlay-content" onClick={e => e.stopPropagation()}>
-              <h3>Bank Trade ({tradeRate}:1)</h3>
-              <div className="trade-modal-ui">
-                <div>
-                  <label>Offer: </label>
-                  <select value={tradeOffer} onChange={e => setTradeOffer(e.target.value)}>{['Wood','Brick','Sheep','Wheat','Ore'].map(r => <option key={r} value={r}>{r}</option>)}</select>
-                </div>
-                <div>&darr;</div>
-                <div>
-                  <label>Receive: </label>
-                  <select value={tradeRequest} onChange={e => setTradeRequest(e.target.value)}>{['Wood','Brick','Sheep','Wheat','Ore'].map(r => <option key={r} value={r}>{r}</option>)}</select>
-                </div>
-                <button className="action-btn" disabled={!canAffordTrade} onClick={() => { handleBankTrade(); setActiveModal(null); }}>Confirm Trade</button>
+            <div className="overlay-content" style={{ minWidth: '500px' }} onClick={e => e.stopPropagation()}>
+              <div className="trade-type-toggle">
+                <button className={tradeType === 'bank' ? 'active' : ''} onClick={() => setTradeType('bank')}>Bank Trade</button>
+                <button className={tradeType === 'player' ? 'active' : ''} onClick={() => setTradeType('player')}>Player Trade</button>
               </div>
+
+              {tradeType === 'bank' ? (
+                <>
+                  <h3>Bank Trade ({tradeRate}:1)</h3>
+                  <div className="trade-modal-ui">
+                    <div>
+                      <label>Offer: </label>
+                      <select value={tradeOffer} onChange={e => setTradeOffer(e.target.value)}>{['Wood','Brick','Sheep','Wheat','Ore'].map(r => <option key={r} value={r}>{r}</option>)}</select>
+                    </div>
+                    <div>&darr;</div>
+                    <div>
+                      <label>Receive: </label>
+                      <select value={tradeRequest} onChange={e => setTradeRequest(e.target.value)}>{['Wood','Brick','Sheep','Wheat','Ore'].map(r => <option key={r} value={r}>{r}</option>)}</select>
+                    </div>
+                    <button className="action-btn" disabled={!canAffordTrade} onClick={() => { handleBankTrade(); setActiveModal(null); }}>Confirm Trade</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h3>Propose Trade</h3>
+                  {!gameState.tradeProposal ? (
+                    <div className="player-trade-ui">
+                      <div className="trade-grid-container">
+                        <div className="trade-column">
+                          <h4>You Give:</h4>
+                          {['Wood','Brick','Sheep','Wheat','Ore'].map(res => (
+                            <div key={res} className="trade-row">
+                              <span>{res}: {player.resources[res]}</span>
+                              <div className="discard-controls">
+                                <button onClick={() => handlePlayerTradeChange('offer', res, -1)}>-</button>
+                                <span>{tradeOfferSelection[res]}</span>
+                                <button onClick={() => handlePlayerTradeChange('offer', res, 1)}>+</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="trade-column">
+                          <h4>You Get:</h4>
+                          {['Wood','Brick','Sheep','Wheat','Ore'].map(res => (
+                            <div key={res} className="trade-row">
+                              <span>{res}</span>
+                              <div className="discard-controls">
+                                <button onClick={() => handlePlayerTradeChange('request', res, -1)}>-</button>
+                                <span>{tradeRequestSelection[res]}</span>
+                                <button onClick={() => handlePlayerTradeChange('request', res, 1)}>+</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <button className="action-btn" onClick={handleProposeTrade}>Propose to Table</button>
+                    </div>
+                  ) : (
+                    <div className="trade-status">
+                      <p><strong>Offer Sent!</strong> Waiting for others to respond...</p>
+                      <div className="responders-list">
+                        {gameState.tradeProposal.responses.length === 0 ? <p>No one has accepted yet.</p> : (
+                          gameState.tradeProposal.responses.map(rid => (
+                            <div key={rid} className="responder-item">
+                              <span>{gameState.players.find(p => p.id === rid).name} accepted</span>
+                              <button className="action-btn" onClick={() => { handleConfirmTrade(rid); setActiveModal(null); }}>Confirm</button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      <button className="purchase-btn" onClick={handleCancelTrade}>Cancel Proposal</button>
+                    </div>
+                  )}
+                </>
+              )}
               <button className="purchase-btn" style={{ marginTop: '20px' }} onClick={() => setActiveModal(null)}>Close</button>
             </div>
           </div>
@@ -554,6 +655,36 @@ function App() {
               {robberTargetHex.victims.map(vid => (
                 <button key={vid} onClick={() => handleVictimSelect(vid)} style={{ background: gameState.players.find(p => p.id === vid).color }}>{gameState.players.find(p => p.id === vid).name}</button>
               ))}
+            </div>
+          </div>
+        )}
+
+        {gameState.tradeProposal && !isTradeProposer && (
+          <div className="overlay">
+            <div className="overlay-content" style={{ minWidth: '450px' }}>
+              <h3>Trade Offer from {gameState.players.find(p => p.id === gameState.tradeProposal.proposerId).name}</h3>
+              <div className="trade-proposal-details">
+                <div className="trade-side">
+                  <h4>You Get:</h4>
+                  {Object.entries(gameState.tradeProposal.offer).filter(([_, count]) => count > 0).map(([res, count]) => (
+                    <div key={res}>{count} x {res}</div>
+                  ))}
+                </div>
+                <div className="trade-side">
+                  <h4>You Give:</h4>
+                  {Object.entries(gameState.tradeProposal.request).filter(([_, count]) => count > 0).map(([res, count]) => (
+                    <div key={res} style={{ color: player.resources[res] < count ? 'red' : 'inherit' }}>
+                      {count} x {res} (You have: {player.resources[res]})
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="modal-actions" style={{ marginTop: '25px', flexDirection: 'row', justifyContent: 'center' }}>
+                <button className="action-btn" disabled={!canAcceptTrade || gameState.tradeProposal.responses.includes(playerId)} onClick={() => handleRespondToTrade(true)}>
+                  {gameState.tradeProposal.responses.includes(playerId) ? "Accepted" : "Accept Trade"}
+                </button>
+                <button className="purchase-btn" onClick={() => handleRespondToTrade(false)}>Decline</button>
+              </div>
             </div>
           </div>
         )}

@@ -43,6 +43,7 @@ const createInitialGameState = () => {
     mustMoveRobber: false,
     discardingPlayers: [],
     lastRoll: null,
+    tradeProposal: null,
     robberHexId: board.find(h => h.resource === 'Desert')?.id || 0,
     phase: 'LOBBY',
     devCards: shuffle([...INITIAL_DEV_CARDS]),
@@ -311,6 +312,76 @@ io.on('connection', (socket) => {
     io.emit('gameStateUpdate', gameState);
   });
 
+  socket.on('propose_trade', ({ offer, request }) => {
+    if (gameState.phase !== 'MAIN' || !gameState.hasRolled || socket.id !== gameState.turnOrder[gameState.currentTurnIndex]) return;
+    const p = gameState.players.find(p => p.id === socket.id);
+    if (!p) return;
+
+    // Validate proposer has offered resources
+    for (const res in offer) {
+      if (p.resources[res] < offer[res]) return socket.emit('error', `Not enough ${res} to trade`);
+    }
+
+    gameState.tradeProposal = {
+      proposerId: socket.id,
+      offer,
+      request,
+      responses: []
+    };
+    io.emit('gameStateUpdate', gameState);
+  });
+
+  socket.on('respond_to_trade', ({ accepted }) => {
+    if (!gameState.tradeProposal || socket.id === gameState.tradeProposal.proposerId) return;
+    
+    if (accepted) {
+      const p = gameState.players.find(p => p.id === socket.id);
+      const request = gameState.tradeProposal.request;
+      // Validate responder has requested resources
+      for (const res in request) {
+        if (p.resources[res] < request[res]) return socket.emit('error', `Not enough ${res} to accept trade`);
+      }
+      if (!gameState.tradeProposal.responses.includes(socket.id)) {
+        gameState.tradeProposal.responses.push(socket.id);
+      }
+    } else {
+      gameState.tradeProposal.responses = gameState.tradeProposal.responses.filter(id => id !== socket.id);
+    }
+    io.emit('gameStateUpdate', gameState);
+  });
+
+  socket.on('confirm_trade', ({ responderId }) => {
+    if (!gameState.tradeProposal || socket.id !== gameState.tradeProposal.proposerId) return;
+    if (!gameState.tradeProposal.responses.includes(responderId)) return;
+
+    const proposer = gameState.players.find(p => p.id === socket.id);
+    const responder = gameState.players.find(p => p.id === responderId);
+    const { offer, request } = gameState.tradeProposal;
+
+    // Final validation of both sides
+    for (const res in offer) if (proposer.resources[res] < offer[res]) return socket.emit('error', 'Trade failed: proposer no longer has resources');
+    for (const res in request) if (responder.resources[res] < request[res]) return socket.emit('error', 'Trade failed: responder no longer has resources');
+
+    // Swap
+    for (const res in offer) {
+      proposer.resources[res] -= offer[res];
+      responder.resources[res] += offer[res];
+    }
+    for (const res in request) {
+      responder.resources[res] -= request[res];
+      proposer.resources[res] += request[res];
+    }
+
+    gameState.tradeProposal = null;
+    io.emit('gameStateUpdate', gameState);
+  });
+
+  socket.on('cancel_trade', () => {
+    if (!gameState.tradeProposal || socket.id !== gameState.tradeProposal.proposerId) return;
+    gameState.tradeProposal = null;
+    io.emit('gameStateUpdate', gameState);
+  });
+
   socket.on('draw_dev_card', () => {
     if (gameState.phase !== 'MAIN' || !gameState.hasRolled || socket.id !== gameState.turnOrder[gameState.currentTurnIndex]) return;
     const p = gameState.players.find(p => p.id === socket.id);
@@ -401,6 +472,7 @@ io.on('connection', (socket) => {
     gameState.currentTurnIndex = (gameState.currentTurnIndex + 1) % gameState.players.length;
     gameState.hasRolled = false;
     gameState.lastRoll = null;
+    gameState.tradeProposal = null;
     gameState.hasPlayedDevCard = false;
     gameState.freeRoadsCount = 0;
     io.emit('gameStateUpdate', gameState);
