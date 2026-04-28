@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const { generateBoard, shuffle } = require('./boardGenerator');
@@ -7,95 +8,89 @@ const { generateNetwork } = require('./networkGenerator');
 const { INITIAL_DEV_CARDS } = require('./gameConstants');
 
 const app = express();
-app.use(cors()); // Allow all origins
+app.use(cors());
 
-app.get('/', (req, res) => {
+// Serve static files from the React app
+app.use(express.static(path.join(__dirname, '../client/dist')));
+
+app.get('/health', (req, res) => {
   res.send('Catan backend is live and running!');
 });
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // Allow Ngrok dynamic URLs
+    origin: "*",
     methods: ["GET", "POST"]
   }
 });
 
-// Single source of truth for the game state
-const initialBoard = generateBoard();
-const initialNetwork = generateNetwork(initialBoard);
-let gameState = {
-  board: initialBoard,
-  nodes: initialNetwork.nodes,
-  edges: initialNetwork.edges,
-  players: [], // { id, name, color, resources: {}, vp: 0, longestRoad: 0, knightsPlayed: 0 }
-  turnOrder: [],
-  setupTurnQueue: [],
-  currentTurnIndex: 0,
-  setupState: { settlementPlaced: false, roadPlaced: false, lastSettlementNodeId: null },
-  hasRolled: false,
-  mustMoveRobber: false,
-  discardingPlayers: [],
-  robberHexId: initialBoard.find(h => h.resource === 'Desert')?.id || 0,
-  phase: 'LOBBY', // LOBBY, INITIAL_SETUP, MAIN, END
-  devCards: shuffle(INITIAL_DEV_CARDS),
-  longestRoadPlayer: null,
-  largestArmyPlayer: null
+const ObjectColors = ['#e63946', '#457b9d', '#f4a261', '#2a9d8f', '#8338ec', '#ffb703'];
+
+const createInitialGameState = () => {
+  const board = generateBoard();
+  const network = generateNetwork(board);
+  return {
+    board,
+    nodes: network.nodes,
+    edges: network.edges,
+    players: [],
+    turnOrder: [],
+    setupTurnQueue: [],
+    currentTurnIndex: 0,
+    setupState: { settlementPlaced: false, roadPlaced: false, lastSettlementNodeId: null },
+    hasRolled: false,
+    mustMoveRobber: false,
+    discardingPlayers: [],
+    lastRoll: null,
+    robberHexId: board.find(h => h.resource === 'Desert')?.id || 0,
+    phase: 'LOBBY',
+    devCards: shuffle([...INITIAL_DEV_CARDS]),
+    longestRoadPlayer: null,
+    largestArmyPlayer: null,
+    hasPlayedDevCard: false,
+    freeRoadsCount: 0
+  };
 };
 
-const ObjectColors = ['#e63946', '#457b9d', '#f4a261', '#2a9d8f', '#8338ec', '#ffb703'];
+let gameState = createInitialGameState();
 
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
-
-  // Send current state to newly connected player
   socket.emit('gameStateUpdate', gameState);
 
   socket.on('join_game', ({ name, color }) => {
-    if (gameState.phase !== 'LOBBY') {
-      socket.emit('error', 'Game has already started');
-      return;
-    }
-    if (gameState.players.length >= 4) {
-      socket.emit('error', 'Game is full');
-      return;
-    }
+    if (gameState.phase !== 'LOBBY') return socket.emit('error', 'Game already started');
+    if (gameState.players.length >= 4) return socket.emit('error', 'Game full');
 
-    const playerExists = gameState.players.find(p => p.id === socket.id);
-    if (!playerExists) {
+    if (!gameState.players.find(p => p.id === socket.id)) {
       const assignedColor = color || ObjectColors[gameState.players.length % ObjectColors.length];
-      const newPlayer = {
+      gameState.players.push({
         id: socket.id,
         name: name || `Player ${gameState.players.length + 1}`,
         color: assignedColor,
         resources: { Wood: 0, Brick: 0, Sheep: 0, Wheat: 0, Ore: 0 },
+        devCards: [],
         vp: 0,
         longestRoad: 0,
         knightsPlayed: 0
-      };
-      gameState.players.push(newPlayer);
+      });
       gameState.turnOrder.push(socket.id);
-      
       io.emit('gameStateUpdate', gameState);
     }
   });
 
   socket.on('start_game', () => {
-    if (gameState.phase === 'LOBBY' && gameState.players.length > 0) {
-      gameState.phase = 'INITIAL_SETUP';
-      
-      // Create a snake-draft order: e.g., 1, 2, 3, 4, 4, 3, 2, 1
-      const forward = [...gameState.turnOrder];
-      const backward = [...gameState.turnOrder].reverse();
-      gameState.setupTurnQueue = [...forward, ...backward];
-      gameState.currentTurnIndex = 0;
-      gameState.setupState = { settlementPlaced: false, roadPlaced: false, lastSettlementNodeId: null };
-      gameState.hasRolled = false;
-      gameState.mustMoveRobber = false;
-      gameState.discardingPlayers = [];
-      
-      io.emit('gameStateUpdate', gameState);
-    }
+    if (gameState.phase !== 'LOBBY' || gameState.players.length === 0) return;
+    
+    gameState.phase = 'INITIAL_SETUP';
+    const forward = [...gameState.turnOrder];
+    const backward = [...gameState.turnOrder].reverse();
+    gameState.setupTurnQueue = [...forward, ...backward];
+    gameState.currentTurnIndex = 0;
+    gameState.setupState = { settlementPlaced: false, roadPlaced: false, lastSettlementNodeId: null };
+    
+    io.emit('gameStateUpdate', gameState);
   });
 
   socket.on('build_settlement', ({ nodeId }) => {
@@ -104,46 +99,26 @@ io.on('connection', (socket) => {
       : gameState.turnOrder[gameState.currentTurnIndex];
       
     if (socket.id !== activePlayerId) return;
-    
     const p = gameState.players.find(p => p.id === activePlayerId);
     if (!p) return;
 
-    if (gameState.phase === 'INITIAL_SETUP') {
-      if (gameState.setupState.settlementPlaced) return; // Only 1 settlement per setup turn
-    } else if (gameState.phase === 'MAIN') {
-      // Check resources
-      if (p.resources.Wood < 1 || p.resources.Brick < 1 || p.resources.Wheat < 1 || p.resources.Sheep < 1) {
-        socket.emit('error', 'Not enough resources for a settlement');
-        return;
-      }
+    if (gameState.phase === 'INITIAL_SETUP' && gameState.setupState.settlementPlaced) return;
+    if (gameState.phase === 'MAIN' && (p.resources.Wood < 1 || p.resources.Brick < 1 || p.resources.Wheat < 1 || p.resources.Sheep < 1)) {
+      return socket.emit('error', 'Not enough resources');
     }
 
     const node = gameState.nodes.find(n => n.id === nodeId);
     if (!node || node.occupant) return;
 
-    // Check distance rule (no adjacent nodes can have a settlement)
-    const adjacentEdges = gameState.edges.filter(e => e.v1 === nodeId || e.v2 === nodeId);
-    const adjacentNodeIds = adjacentEdges.map(e => e.v1 === nodeId ? e.v2 : e.v1);
-    const hasAdjacentSettlement = adjacentNodeIds.some(id => {
-      const adjNode = gameState.nodes.find(n => n.id === id);
-      return adjNode && adjNode.occupant !== null;
-    });
-
-    if (hasAdjacentSettlement) {
-      socket.emit('error', 'Distance rule: too close to another settlement');
-      return;
+    const adjNodes = gameState.edges.filter(e => e.v1 === nodeId || e.v2 === nodeId).map(e => e.v1 === nodeId ? e.v2 : e.v1);
+    if (adjNodes.some(id => gameState.nodes.find(n => n.id === id).occupant)) {
+      return socket.emit('error', 'Too close to another settlement');
     }
 
-    if (gameState.phase === 'MAIN') {
-      // Must connect to at least one of the player's roads
-      const hasConnectingRoad = adjacentEdges.some(e => e.occupant === activePlayerId);
-      if (!hasConnectingRoad) {
-        socket.emit('error', 'Settlement must be connected to your road');
-        return;
-      }
+    if (gameState.phase === 'MAIN' && !gameState.edges.some(e => (e.v1 === nodeId || e.v2 === nodeId) && e.occupant === activePlayerId)) {
+      return socket.emit('error', 'Must connect to a road');
     }
 
-    // Place settlement
     node.occupant = activePlayerId;
     node.buildingType = 'Settlement';
     p.vp += 1;
@@ -151,52 +126,15 @@ io.on('connection', (socket) => {
     if (gameState.phase === 'INITIAL_SETUP') {
       gameState.setupState.settlementPlaced = true;
       gameState.setupState.lastSettlementNodeId = nodeId;
-      // If it's the second round of initial setup, grant starting resources
       if (gameState.currentTurnIndex >= gameState.turnOrder.length) {
-        node.hexes.forEach(hexId => {
-          const hex = gameState.board[hexId];
-          if (hex && hex.resource !== 'Ocean' && hex.resource !== 'Desert') {
-            p.resources[hex.resource] += 1;
-          }
+        node.hexes.forEach(hId => {
+          const hex = gameState.board[hId];
+          if (hex && hex.resource !== 'Ocean' && hex.resource !== 'Desert') p.resources[hex.resource] += 1;
         });
       }
-    } else if (gameState.phase === 'MAIN') {
-      // Deduct resources
-      p.resources.Wood -= 1;
-      p.resources.Brick -= 1;
-      p.resources.Wheat -= 1;
-      p.resources.Sheep -= 1;
+    } else {
+      p.resources.Wood -= 1; p.resources.Brick -= 1; p.resources.Wheat -= 1; p.resources.Sheep -= 1;
     }
-
-    io.emit('gameStateUpdate', gameState);
-  });
-
-  socket.on('build_city', ({ nodeId }) => {
-    if (gameState.phase !== 'MAIN') return;
-    const activePlayerId = gameState.turnOrder[gameState.currentTurnIndex];
-    if (socket.id !== activePlayerId) return;
-
-    const p = gameState.players.find(p => p.id === activePlayerId);
-    if (!p) return;
-
-    // Check resources
-    if (p.resources.Wheat < 2 || p.resources.Ore < 3) {
-      socket.emit('error', 'Not enough resources for a city');
-      return;
-    }
-
-    const node = gameState.nodes.find(n => n.id === nodeId);
-    if (!node || node.occupant !== activePlayerId || node.buildingType !== 'Settlement') {
-      socket.emit('error', 'Can only upgrade your own settlement to a city');
-      return;
-    }
-
-    node.buildingType = 'City';
-    p.vp += 1; // cities are worth 2 VP, but settlement was already 1 VP
-
-    p.resources.Wheat -= 2;
-    p.resources.Ore -= 3;
-
     io.emit('gameStateUpdate', gameState);
   });
 
@@ -206,19 +144,12 @@ io.on('connection', (socket) => {
       : gameState.turnOrder[gameState.currentTurnIndex];
       
     if (socket.id !== activePlayerId) return;
-
     const p = gameState.players.find(p => p.id === activePlayerId);
     if (!p) return;
 
-    if (gameState.phase === 'INITIAL_SETUP') {
-      // Must build settlement first in setup
-      if (!gameState.setupState.settlementPlaced || gameState.setupState.roadPlaced) return; 
-    } else if (gameState.phase === 'MAIN') {
-      // Check resources
-      if (p.resources.Wood < 1 || p.resources.Brick < 1) {
-        socket.emit('error', 'Not enough resources for a road');
-        return;
-      }
+    if (gameState.phase === 'INITIAL_SETUP' && (!gameState.setupState.settlementPlaced || gameState.setupState.roadPlaced)) return;
+    if (gameState.phase === 'MAIN' && gameState.freeRoadsCount === 0 && (p.resources.Wood < 1 || p.resources.Brick < 1)) {
+      return socket.emit('error', 'Not enough resources');
     }
 
     const edge = gameState.edges.find(e => e.id === edgeId);
@@ -226,276 +157,206 @@ io.on('connection', (socket) => {
 
     if (gameState.phase === 'INITIAL_SETUP') {
       if (edge.v1 !== gameState.setupState.lastSettlementNodeId && edge.v2 !== gameState.setupState.lastSettlementNodeId) {
-        socket.emit('error', 'Road must connect to the settlement you just placed');
-        return;
+        return socket.emit('error', 'Must connect to the settlement just placed');
       }
     } else {
-      // Must connect to player's own road, settlement, or city
-      const v1 = edge.v1;
-      const v2 = edge.v2;
-      
-      const isConnectedToOwnBuilding = gameState.nodes.some(n => 
-        (n.id === v1 || n.id === v2) && n.occupant === activePlayerId
-      );
-
-      const adjacentEdgesToV1 = gameState.edges.filter(e => e.id !== edgeId && (e.v1 === v1 || e.v2 === v1));
-      const adjacentEdgesToV2 = gameState.edges.filter(e => e.id !== edgeId && (e.v1 === v2 || e.v2 === v2));
-      const isConnectedToOwnRoad = [...adjacentEdgesToV1, ...adjacentEdgesToV2].some(e => e.occupant === activePlayerId);
-
-      if (!isConnectedToOwnBuilding && !isConnectedToOwnRoad) {
-        socket.emit('error', 'Road must be connected to your own road or settlement');
-        return;
-      }
+      const connected = gameState.nodes.some(n => (n.id === edge.v1 || n.id === edge.v2) && n.occupant === activePlayerId) ||
+                        gameState.edges.some(e => (e.v1 === edge.v1 || e.v2 === edge.v1 || e.v1 === edge.v2 || e.v2 === edge.v2) && e.occupant === activePlayerId);
+      if (!connected) return socket.emit('error', 'Must connect to your network');
     }
 
-    // Place road
     edge.occupant = activePlayerId;
-
     if (gameState.phase === 'INITIAL_SETUP') {
       gameState.setupState.roadPlaced = true;
-      // In setup, placing a road ends your turn
       gameState.currentTurnIndex++;
       gameState.setupState = { settlementPlaced: false, roadPlaced: false, lastSettlementNodeId: null };
-      
       if (gameState.currentTurnIndex >= gameState.setupTurnQueue.length) {
         gameState.phase = 'MAIN';
-        gameState.currentTurnIndex = 0; // Reset to normal turnOrder
+        gameState.currentTurnIndex = 0;
       }
-    } else if (gameState.phase === 'MAIN') {
-      // Deduct resources
-      p.resources.Wood -= 1;
-      p.resources.Brick -= 1;
+    } else {
+      if (gameState.freeRoadsCount > 0) gameState.freeRoadsCount--;
+      else { p.resources.Wood -= 1; p.resources.Brick -= 1; }
     }
+    evaluateSpecialConditions();
+    io.emit('gameStateUpdate', gameState);
+  });
 
+  socket.on('build_city', ({ nodeId }) => {
+    if (gameState.phase !== 'MAIN') return;
+    const p = gameState.players.find(p => p.id === socket.id);
+    if (!p || p.resources.Wheat < 2 || p.resources.Ore < 3) return socket.emit('error', 'Not enough resources');
+    const node = gameState.nodes.find(n => n.id === nodeId);
+    if (!node || node.occupant !== socket.id || node.buildingType !== 'Settlement') return;
+    node.buildingType = 'City';
+    p.vp += 1;
+    p.resources.Wheat -= 2; p.resources.Ore -= 3;
     io.emit('gameStateUpdate', gameState);
   });
 
   socket.on('roll_dice', () => {
-    const currentPlayerId = gameState.turnOrder[gameState.currentTurnIndex];
-    if (socket.id !== currentPlayerId) {
-      // Not their turn
-      return;
-    }
-    if (gameState.hasRolled) return;
-
+    if (gameState.phase !== 'MAIN' || gameState.hasRolled || socket.id !== gameState.turnOrder[gameState.currentTurnIndex]) return;
     const d1 = Math.floor(Math.random() * 6) + 1;
     const d2 = Math.floor(Math.random() * 6) + 1;
     const roll = d1 + d2;
-    
     gameState.hasRolled = true;
-
+    gameState.lastRoll = { d1, d2, roll };
     io.emit('dice_rolled', { d1, d2, roll });
 
-    // Resource calculation
-    if (roll !== 7) {
-      // Find hexes that produce
-      const producingHexes = gameState.board.filter(hex => hex.numberToken === roll && hex.resource !== 'Desert' && hex.resource !== 'Ocean' && hex.id !== gameState.robberHexId);
-      
-      producingHexes.forEach(hex => {
-        // Find nodes adjacent to this hex
-        const adjacentNodes = gameState.nodes.filter(n => n.hexes.includes(hex.id));
-        
-        adjacentNodes.forEach(node => {
-          if (node.occupant) {
-            const player = gameState.players.find(p => p.id === node.occupant);
-            if (player) {
-              const amount = node.buildingType === 'City' ? 2 : 1;
-              player.resources[hex.resource] += amount;
-            }
-          }
+    if (roll === 7) {
+      gameState.players.forEach(player => {
+        const total = Object.values(player.resources).reduce((a, b) => a + b, 0);
+        if (total > 7) gameState.discardingPlayers.push({ id: player.id, count: Math.floor(total / 2) });
+      });
+      if (gameState.discardingPlayers.length === 0) gameState.mustMoveRobber = true;
+    } else {
+      gameState.board.filter(h => h.numberToken === roll && h.id !== gameState.robberHexId).forEach(hex => {
+        gameState.nodes.filter(n => n.hexes.includes(hex.id) && n.occupant).forEach(node => {
+          const player = gameState.players.find(p => p.id === node.occupant);
+          player.resources[hex.resource] += (node.buildingType === 'City' ? 2 : 1);
         });
       });
-    } else {
-      // 7 rolled
-      gameState.discardingPlayers = [];
-      gameState.players.forEach(player => {
-        const totalResources = Object.values(player.resources).reduce((sum, val) => sum + val, 0);
-        if (totalResources > 7) {
-          gameState.discardingPlayers.push({
-            id: player.id,
-            count: Math.floor(totalResources / 2)
-          });
-        }
-      });
-      
-      if (gameState.discardingPlayers.length === 0) {
-        gameState.mustMoveRobber = true;
-      }
     }
-
-    // Check Largest Army / Longest Road if they were updated in this turn (placeholder)
-    // evaluateSpecialConditions();
-
     io.emit('gameStateUpdate', gameState);
   });
 
   socket.on('discard_cards', ({ resourcesToDiscard }) => {
-    const discardInfoIndex = gameState.discardingPlayers.findIndex(dp => dp.id === socket.id);
-    if (discardInfoIndex === -1) return;
+    const playerIndex = gameState.discardingPlayers.findIndex(p => p.id === socket.id);
+    if (playerIndex === -1) return;
 
-    const discardInfo = gameState.discardingPlayers[discardInfoIndex];
-    const p = gameState.players.find(p => p.id === socket.id);
-    if (!p) return;
+    const player = gameState.players.find(p => p.id === socket.id);
+    const requiredCount = gameState.discardingPlayers[playerIndex].count;
+    
+    // Validate count
+    const totalDiscarded = Object.values(resourcesToDiscard).reduce((a, b) => a + b, 0);
+    if (totalDiscarded !== requiredCount) return socket.emit('error', `Must discard exactly ${requiredCount} cards`);
 
-    // Validate total count
-    const totalToDiscard = Object.values(resourcesToDiscard).reduce((sum, val) => sum + val, 0);
-    if (totalToDiscard !== discardInfo.count) {
-      socket.emit('error', `You must discard exactly ${discardInfo.count} resources`);
-      return;
-    }
-
-    // Validate player has these resources
-    for (const [res, count] of Object.entries(resourcesToDiscard)) {
-      if (p.resources[res] < count) {
-        socket.emit('error', `You do not have enough ${res} to discard`);
-        return;
-      }
+    // Validate resource availability
+    for (const res in resourcesToDiscard) {
+      if (player.resources[res] < resourcesToDiscard[res]) return socket.emit('error', 'Not enough resources');
     }
 
     // Deduct resources
-    for (const [res, count] of Object.entries(resourcesToDiscard)) {
-      p.resources[res] -= count;
+    for (const res in resourcesToDiscard) {
+      player.resources[res] -= resourcesToDiscard[res];
     }
 
-    // Remove player from discarding list
-    gameState.discardingPlayers.splice(discardInfoIndex, 1);
+    // Remove from discarding list
+    gameState.discardingPlayers.splice(playerIndex, 1);
 
-    // If everyone is done discarding, the active player must now move the robber
+    // If all done, trigger robber movement
     if (gameState.discardingPlayers.length === 0) {
       gameState.mustMoveRobber = true;
     }
-
+    
     io.emit('gameStateUpdate', gameState);
   });
 
   socket.on('move_robber', ({ hexId, victimId }) => {
-    const currentPlayerId = gameState.turnOrder[gameState.currentTurnIndex];
-    if (socket.id !== currentPlayerId) return;
-    if (!gameState.mustMoveRobber) return;
-    if (gameState.discardingPlayers.length > 0) return; // Wait for discards
-    
-    if (hexId === gameState.robberHexId) {
-      socket.emit('error', 'Robber must be moved to a different hex');
-      return;
-    }
-    
+    if (!gameState.mustMoveRobber || socket.id !== gameState.turnOrder[gameState.currentTurnIndex]) return;
     const hex = gameState.board.find(h => h.id === hexId);
-    if (!hex || hex.resource === 'Ocean') return;
-
+    if (!hex || hex.resource === 'Ocean' || hexId === gameState.robberHexId) return;
     gameState.robberHexId = hexId;
     gameState.mustMoveRobber = false;
-    
     if (victimId) {
-      // Validate victim is on the hex
-      const adjacentNodes = gameState.nodes.filter(n => n.hexes.includes(hexId));
-      const potentialVictims = adjacentNodes.map(n => n.occupant).filter(occ => occ && occ !== currentPlayerId);
-      
-      if (potentialVictims.includes(victimId)) {
-        const victim = gameState.players.find(p => p.id === victimId);
-        const thief = gameState.players.find(p => p.id === currentPlayerId);
-        
-        const resources = ['Wood', 'Brick', 'Sheep', 'Wheat', 'Ore'];
-        const available = resources.filter(res => victim.resources[res] > 0);
-        
-        if (available.length > 0) {
-          const resToSteal = available[Math.floor(Math.random() * available.length)];
-          victim.resources[resToSteal] -= 1;
-          thief.resources[resToSteal] += 1;
-        }
+      const victim = gameState.players.find(p => p.id === victimId);
+      const res = Object.keys(victim.resources).filter(k => victim.resources[k] > 0);
+      if (res.length > 0) {
+        const stolen = res[Math.floor(Math.random() * res.length)];
+        victim.resources[stolen]--;
+        gameState.players.find(p => p.id === socket.id).resources[stolen]++;
       }
     }
+    io.emit('gameStateUpdate', gameState);
+  });
+
+  socket.on('bank_trade', ({ offerResource, requestResource }) => {
+    if (gameState.phase !== 'MAIN' || !gameState.hasRolled || socket.id !== gameState.turnOrder[gameState.currentTurnIndex]) return;
+    if (offerResource === requestResource) return;
+
+    const p = gameState.players.find(p => p.id === socket.id);
+    if (!p) return;
+
+    // Calculate trade rate
+    let tradeRate = 4;
+    const playerNodes = gameState.nodes.filter(n => n.occupant === socket.id);
+    playerNodes.forEach(node => {
+      if (node.port) {
+        if (node.port === '3:1') tradeRate = Math.min(tradeRate, 3);
+        if (node.port === `${offerResource} 2:1`) tradeRate = Math.min(tradeRate, 2);
+      }
+    });
+
+    if (p.resources[offerResource] < tradeRate) return socket.emit('error', 'Not enough resources for trade');
+
+    p.resources[offerResource] -= tradeRate;
+    p.resources[requestResource] += 1;
     
     io.emit('gameStateUpdate', gameState);
   });
 
-  socket.on('end_turn', () => {
-    const currentPlayerId = gameState.turnOrder[gameState.currentTurnIndex];
-    if (socket.id === currentPlayerId && gameState.hasRolled) {
-      gameState.currentTurnIndex = (gameState.currentTurnIndex + 1) % gameState.players.length;
-      gameState.hasRolled = false;
-      io.emit('gameStateUpdate', gameState);
-    }
-  });
-
-  // Example of drawing a dev card
   socket.on('draw_dev_card', () => {
-    const currentPlayerId = gameState.turnOrder[gameState.currentTurnIndex];
-    if (socket.id !== currentPlayerId) return;
-
-    const p = gameState.players.find(p => p.id === currentPlayerId);
-    if (!p) return;
-    
-    // Check cost (1 Wheat, 1 Sheep, 1 Ore)
-    if (p.resources.Wheat >= 1 && p.resources.Sheep >= 1 && p.resources.Ore >= 1) {
-      if (gameState.devCards.length > 0) {
-        // Deduct resources
-        p.resources.Wheat -= 1;
-        p.resources.Sheep -= 1;
-        p.resources.Ore -= 1;
-        
-        // Draw card
-        const card = gameState.devCards.pop();
-        
-        // Send card privately to player
-        socket.emit('dev_card_drawn', card);
-        io.emit('gameStateUpdate', gameState);
-      }
-    }
+    if (gameState.phase !== 'MAIN' || !gameState.hasRolled || socket.id !== gameState.turnOrder[gameState.currentTurnIndex]) return;
+    const p = gameState.players.find(p => p.id === socket.id);
+    if (p.resources.Wheat < 1 || p.resources.Sheep < 1 || p.resources.Ore < 1 || gameState.devCards.length === 0) return;
+    p.resources.Wheat--; p.resources.Sheep--; p.resources.Ore--;
+    const type = gameState.devCards.pop();
+    const card = { id: Math.random().toString(36).substr(2, 9), type, canPlay: false };
+    p.devCards.push(card);
+    if (type === 'Victory Point') p.vp++;
+    socket.emit('dev_card_drawn', card);
+    io.emit('gameStateUpdate', gameState);
   });
 
-  socket.on('bank_trade', ({ offerResource, requestResource }) => {
-    if (gameState.phase !== 'MAIN') return;
-    
-    const currentPlayerId = gameState.turnOrder[gameState.currentTurnIndex];
-    if (socket.id !== currentPlayerId) return;
-    if (!gameState.hasRolled) {
-      socket.emit('error', 'Must roll dice before trading');
-      return;
-    }
-
-    const p = gameState.players.find(p => p.id === currentPlayerId);
-    if (!p) return;
-
-    if (!offerResource || !requestResource || offerResource === requestResource) {
-      socket.emit('error', 'Invalid trade request');
-      return;
-    }
-
-    // Determine the exchange rate (default 4:1)
-    let rate = 4;
-
-    // Check player's settlements/cities for ports
-    const playerNodes = gameState.nodes.filter(n => n.occupant === currentPlayerId);
-    playerNodes.forEach(node => {
-      if (node.port) {
-        if (node.port === '3:1') {
-          rate = Math.min(rate, 3);
-        } else if (node.port === `${offerResource} 2:1`) {
-          rate = Math.min(rate, 2);
-        }
-      }
-    });
-
-    if (p.resources[offerResource] >= rate) {
-      p.resources[offerResource] -= rate;
-      p.resources[requestResource] += 1;
-      io.emit('gameStateUpdate', gameState);
-    } else {
-      socket.emit('error', `Not enough ${offerResource} to trade. You need ${rate}.`);
-    }
+  socket.on('play_knight', ({ cardId }) => {
+    const p = gameState.players.find(p => p.id === socket.id);
+    const idx = p?.devCards.findIndex(c => c.id === cardId && c.type === 'Knight' && c.canPlay);
+    if (idx === -1 || gameState.hasPlayedDevCard) return;
+    p.devCards.splice(idx, 1);
+    p.knightsPlayed++;
+    gameState.hasPlayedDevCard = true;
+    gameState.mustMoveRobber = true;
+    evaluateSpecialConditions();
+    io.emit('gameStateUpdate', gameState);
   });
 
-  socket.on('disconnect', () => {
-    console.log(`User disconnected: ${socket.id}`);
+  socket.on('end_turn', () => {
+    if (socket.id !== gameState.turnOrder[gameState.currentTurnIndex] || !gameState.hasRolled) return;
+    const p = gameState.players.find(p => p.id === socket.id);
+    p.devCards.forEach(c => c.canPlay = true);
+    gameState.currentTurnIndex = (gameState.currentTurnIndex + 1) % gameState.players.length;
+    gameState.hasRolled = false;
+    gameState.lastRoll = null;
+    gameState.hasPlayedDevCard = false;
+    gameState.freeRoadsCount = 0;
+    io.emit('gameStateUpdate', gameState);
   });
+
+  socket.on('disconnect', () => console.log(`User disconnected: ${socket.id}`));
 });
 
 const evaluateSpecialConditions = () => {
-    // Logic for finding the player with the largest army (>= 3 knights)
-    // Logic for finding the player with longest road (>= 5 continuous roads)
+  // Largest Army (min 3 knights)
+  let bestArmy = 2;
+  let currentLeader = gameState.largestArmyPlayer;
+  
+  gameState.players.forEach(p => {
+    if (p.knightsPlayed > bestArmy) {
+      bestArmy = p.knightsPlayed;
+      gameState.largestArmyPlayer = p.id;
+    }
+  });
+
+  if (gameState.largestArmyPlayer !== currentLeader) {
+    gameState.players.forEach(p => {
+      if (p.id === currentLeader) p.vp -= 2;
+      if (p.id === gameState.largestArmyPlayer) p.vp += 2;
+    });
+  }
+
+  // Longest Road (min 5 roads) - Simplified for now
+  // In a real implementation, we'd need a path-finding algorithm
 };
 
-const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.get('*path', (req, res) => res.sendFile(path.join(__dirname, '../client/dist/index.html')));
+server.listen(process.env.PORT || 3001, '0.0.0.0', () => console.log(`Server running`));

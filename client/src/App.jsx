@@ -1,18 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
-import { GiWoodPile, GiBrickWall, GiSheep, GiWheat, GiOre } from 'react-icons/gi';
+import { GiWoodPile, GiBrickWall, GiSheep, GiWheat, GiOre, GiSwordsEmblem, GiTrophy, GiCardPlay } from 'react-icons/gi';
 import Board from './Board';
 import './App.css';
 
-// Read server URL from env or fallback to localhost
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
-const socket = io(SERVER_URL);
+// Using relative connection: defaults to the same host/port that served the page.
+const socket = io({
+  transports: ['websocket', 'polling'],
+  reconnectionAttempts: 5
+});
 
 function App() {
   const [gameState, setGameState] = useState(null);
   const [playerId, setPlayerId] = useState(null);
-  const [diceRoll, setDiceRoll] = useState(null);
-  const [buildingMode, setBuildingMode] = useState(null); // 'ROAD', 'SETTLEMENT', 'CITY', null
+  const [buildingMode, setBuildingMode] = useState(null);
+  const [connectionStatus, setConnectionStatus] = useState('connecting');
 
   const [playerName, setPlayerName] = useState('');
   const [playerColor, setPlayerColor] = useState('#e63946');
@@ -21,30 +23,32 @@ function App() {
 
   const [discardSelection, setDiscardSelection] = useState({ Wood: 0, Brick: 0, Sheep: 0, Wheat: 0, Ore: 0 });
   const [robberTargetHex, setRobberTargetHex] = useState(null);
+  
+  // Dev Card Interactive State
+  const [devCardAction, setDevCardAction] = useState(null); // { type, cardId, selection: [] }
 
   useEffect(() => {
     socket.on('connect', () => {
       setPlayerId(socket.id);
+      setConnectionStatus('connected');
+    });
+
+    socket.on('connect_error', (err) => {
+      setConnectionStatus('error');
     });
 
     socket.on('gameStateUpdate', (state) => {
       setGameState(state);
-      // Reset mode on turn end or phase change, but it might be easier to leave it unless turn changes
-      // Actually let's just let the user toggle it.
-    });
-
-    socket.on('dice_rolled', (rollData) => {
-      setDiceRoll(rollData);
     });
 
     socket.on('error', (msg) => {
-      alert(msg); // Provide feedback to the user on error
+      alert(msg);
     });
 
     return () => {
       socket.off('connect');
+      socket.off('connect_error');
       socket.off('gameStateUpdate');
-      socket.off('dice_rolled');
       socket.off('error');
     };
   }, []);
@@ -79,7 +83,6 @@ function App() {
 
   const handleHexClick = (hexId) => {
     if (gameState.mustMoveRobber && gameState.discardingPlayers.length === 0) {
-      // Find victims
       const adjacentNodes = gameState.nodes.filter(n => n.hexes.includes(hexId));
       const potentialVictims = adjacentNodes
         .map(n => n.occupant)
@@ -105,7 +108,6 @@ function App() {
     setDiscardSelection(prev => {
       const next = { ...prev };
       next[res] += delta;
-      // Clamp bounds
       if (next[res] < 0) next[res] = 0;
       if (next[res] > player.resources[res]) next[res] = player.resources[res];
       return next;
@@ -127,7 +129,48 @@ function App() {
     socket.emit('bank_trade', { offerResource: tradeOffer, requestResource: tradeRequest });
   };
 
-  if (!gameState) return <div>Loading...</div>;
+  // Dev Card Actions
+  const handlePlayCard = (card) => {
+    if (!card.canPlay || gameState.hasPlayedDevCard) return;
+
+    if (card.type === 'Knight') {
+      socket.emit('play_knight', { cardId: card.id });
+    } else if (card.type === 'Year of Plenty') {
+      setDevCardAction({ type: 'Year of Plenty', cardId: card.id, selection: [] });
+    } else if (card.type === 'Monopoly') {
+      setDevCardAction({ type: 'Monopoly', cardId: card.id, selection: [] });
+    } else if (card.type === 'Road Building') {
+      socket.emit('play_road_building', { cardId: card.id });
+    }
+  };
+
+  const handleDevCardResourceSelect = (res) => {
+    if (devCardAction.type === 'Year of Plenty') {
+      const newSelection = [...devCardAction.selection, res];
+      if (newSelection.length === 2) {
+        socket.emit('play_year_of_plenty', { cardId: devCardAction.cardId, resources: newSelection });
+        setDevCardAction(null);
+      } else {
+        setDevCardAction({ ...devCardAction, selection: newSelection });
+      }
+    } else if (devCardAction.type === 'Monopoly') {
+      socket.emit('play_monopoly', { cardId: devCardAction.cardId, resource: res });
+      setDevCardAction(null);
+    }
+  };
+
+  if (!gameState) {
+    return (
+      <div className="loading-screen">
+        <div className="loader"></div>
+        <h2>Loading Catan...</h2>
+        <p>Status: {connectionStatus === 'connecting' ? 'Connecting to server...' : 
+                   connectionStatus === 'connected' ? 'Connected! Waiting for game state...' : 
+                   'Error connecting. Check your network.'}</p>
+        {connectionStatus === 'error' && <button onClick={() => window.location.reload()}>Retry</button>}
+      </div>
+    );
+  }
 
   const player = gameState.players.find(p => p.id === playerId);
 
@@ -135,62 +178,39 @@ function App() {
     return (
       <div className="App">
         <h1>Settlers of Catan - Lobby</h1>
-        
         {!player ? (
           <form onSubmit={handleJoin} className="lobby-form">
-            <input 
-              type="text" 
-              placeholder="Your Name" 
-              value={playerName} 
-              onChange={e => setPlayerName(e.target.value)} 
-              required 
-            />
-            <input 
-              type="color" 
-              value={playerColor} 
-              onChange={e => setPlayerColor(e.target.value)} 
-              title="Choose your color"
-            />
+            <input type="text" placeholder="Your Name" value={playerName} onChange={e => setPlayerName(e.target.value)} required />
+            <input type="color" value={playerColor} onChange={e => setPlayerColor(e.target.value)} title="Choose your color" />
             <button type="submit">Join Game</button>
           </form>
         ) : (
           <div className="lobby-waiting">
             <h2>Welcome, {player.name}!</h2>
-            {gameState.players[0].id === playerId && (
-              <button onClick={handleStartGame} disabled={gameState.players.length < 1}>
-                Start Game
-              </button>
-            )}
-            {gameState.players[0].id !== playerId && (
-              <p>Waiting for the host to start the game...</p>
-            )}
+            {gameState.players[0].id === playerId ? (
+              <button onClick={handleStartGame} disabled={gameState.players.length < 1}>Start Game</button>
+            ) : <p>Waiting for host to start...</p>}
           </div>
         )}
-        
         <div className="players-list">
           <h3>Players Joined ({gameState.players.length}/4)</h3>
-          <ul>
-            {gameState.players.map(p => (
-              <li key={p.id} style={{ color: p.color, fontWeight: 'bold' }}>{p.name}</li>
-            ))}
-          </ul>
+          <ul>{gameState.players.map(p => <li key={p.id} style={{ color: p.color, fontWeight: 'bold' }}>{p.name}</li>)}</ul>
         </div>
       </div>
     );
   }
 
-  // Determine turn status for INITIAL_SETUP or MAIN phases
+  // Turn logic
   let isMyTurn = false;
   let activePlayerName = '';
-  
   if (gameState.phase === 'INITIAL_SETUP') {
     const activeId = gameState.setupTurnQueue[gameState.currentTurnIndex];
     isMyTurn = activeId === playerId;
-    activePlayerName = gameState.players.find(p => p.id === activeId)?.name || `Player`;
+    activePlayerName = gameState.players.find(p => p.id === activeId)?.name || 'Player';
   } else if (gameState.phase === 'MAIN') {
     const activeId = gameState.turnOrder[gameState.currentTurnIndex];
     isMyTurn = activeId === playerId;
-    activePlayerName = gameState.players.find(p => p.id === activeId)?.name || `Player`;
+    activePlayerName = gameState.players.find(p => p.id === activeId)?.name || 'Player';
   }
 
   const canAffordRoad = player && player.resources.Wood >= 1 && player.resources.Brick >= 1;
@@ -221,177 +241,143 @@ function App() {
     <div className="App">
       <h1>Settlers of Catan</h1>
       
+      {gameState.lastRoll && (
+        <div className="dice-result">
+          <h3>Roll: {gameState.lastRoll.roll} ({gameState.lastRoll.d1} + {gameState.lastRoll.d2})</h3>
+        </div>
+      )}
+
       {player && (
         <div className="player-info" style={{ borderColor: player.color }}>
-          <h2>{player.name}</h2>
-          
-          {gameState.phase === 'MAIN' && (
-            <div className="resources">
-              <span title="Wood"><GiWoodPile /> {player.resources.Wood}</span>
-              <span title="Brick"><GiBrickWall /> {player.resources.Brick}</span>
-              <span title="Sheep"><GiSheep /> {player.resources.Sheep}</span>
-              <span title="Wheat"><GiWheat /> {player.resources.Wheat}</span>
-              <span title="Ore"><GiOre /> {player.resources.Ore}</span>
-            </div>
-          )}
+          <h2>{player.name} {player.vp >= 10 && "(WINNER!)"}</h2>
+          <div className="stats-row">
+            <span>VP: {player.vp}</span>
+            <span>Knights: {player.knightsPlayed}</span>
+          </div>
           
           {gameState.phase === 'INITIAL_SETUP' && (
-             <p className="phase-indicator"><strong>Phase: Initial Setup</strong></p>
+             <div className="setup-info">
+               <p className="phase-indicator"><strong>Phase: Initial Setup</strong></p>
+               {isMyTurn && (
+                 <p className="instruction">
+                   {!gameState.setupState.settlementPlaced 
+                     ? "Click on an intersection to build your Settlement." 
+                     : "Now click on an adjacent edge to build your Road."}
+                 </p>
+               )}
+             </div>
+          )}
+
+          {gameState.phase === 'MAIN' && (
+            <>
+              <div className="resources">
+                <span title="Wood"><GiWoodPile /> {player.resources.Wood}</span>
+                <span title="Brick"><GiBrickWall /> {player.resources.Brick}</span>
+                <span title="Sheep"><GiSheep /> {player.resources.Sheep}</span>
+                <span title="Wheat"><GiWheat /> {player.resources.Wheat}</span>
+                <span title="Ore"><GiOre /> {player.resources.Ore}</span>
+              </div>
+              
+              <div className="dev-cards-held">
+                <h4>Your Dev Cards:</h4>
+                <div className="dev-cards-list">
+                  {player.devCards.map(card => (
+                    <button 
+                      key={card.id} 
+                      className={`dev-card ${card.canPlay && !gameState.hasPlayedDevCard ? 'playable' : 'unplayable'}`}
+                      disabled={!card.canPlay || gameState.hasPlayedDevCard || !isMyTurn}
+                      onClick={() => handlePlayCard(card)}
+                      title={card.canPlay ? `Click to play ${card.type}` : "Cannot play on the turn you bought it"}
+                    >
+                      {card.type === 'Knight' && <GiSwordsEmblem />}
+                      {card.type === 'Victory Point' && <GiTrophy />}
+                      {card.type !== 'Knight' && card.type !== 'Victory Point' && <GiCardPlay />}
+                      <span>{card.type}</span>
+                    </button>
+                  ))}
+                  {player.devCards.length === 0 && <p>No cards held</p>}
+                </div>
+              </div>
+            </>
           )}
 
           <div className="controls">
-             {isMyTurn ? (
-               <>
-                 <p><strong>It's your turn!</strong></p>
-                 {gameState.phase === 'INITIAL_SETUP' ? (
-                   <p>Click on an intersection to build a Settlement, then click on an edge to build a Road.</p>
-                 ) : (
-                   <>
-                     <div className="main-actions">
-                       <button 
-                         className="action-btn" 
-                         onClick={handleRollDice} 
-                         disabled={gameState.hasRolled}
-                         style={{ opacity: gameState.hasRolled ? 0.5 : 1, cursor: gameState.hasRolled ? 'not-allowed' : 'pointer' }}
-                       >
-                         Roll Dice
-                       </button>
-                       <button 
-                         className="action-btn" 
-                         onClick={handleEndTurn}
-                         disabled={!gameState.hasRolled || gameState.mustMoveRobber}
-                         style={{ opacity: (!gameState.hasRolled || gameState.mustMoveRobber) ? 0.5 : 1, cursor: (!gameState.hasRolled || gameState.mustMoveRobber) ? 'not-allowed' : 'pointer' }}
-                       >
-                         End Turn
-                       </button>
-                     </div>
-                     {gameState.mustMoveRobber && (
-                       <p className="build-prompt" style={{ color: '#e63946', fontSize: '1.4rem' }}>You rolled a 7! Click a hex to move the Robber.</p>
-                     )}
-                     <div className="purchase-actions" style={{ opacity: gameState.mustMoveRobber ? 0.3 : 1, pointerEvents: gameState.mustMoveRobber ? 'none' : 'auto' }}>
-                       <button 
-                         className={getButtonClass(buildingMode === 'ROAD', canAffordRoad)}
-                         onClick={() => setBuildingMode(buildingMode === 'ROAD' ? null : 'ROAD')}
-                       >
-                         Road (1W, 1B)
-                       </button>
-                       <button 
-                         className={getButtonClass(buildingMode === 'SETTLEMENT', canAffordSettlement)}
-                         onClick={() => setBuildingMode(buildingMode === 'SETTLEMENT' ? null : 'SETTLEMENT')}
-                       >
-                         Settlement (1W, 1B, 1S, 1Wh)
-                       </button>
-                       <button 
-                         className={getButtonClass(buildingMode === 'CITY', canAffordCity)}
-                         onClick={() => setBuildingMode(buildingMode === 'CITY' ? null : 'CITY')}
-                       >
-                         City (2Wh, 3O)
-                       </button>
-                       <button 
-                         className={getButtonClass(false, canAffordDevCard)}
-                         onClick={handleDrawDevCard}
-                       >
-                         Dev Card (1Wh, 1S, 1O)
-                       </button>
-                     </div>
-                     {buildingMode && !gameState.mustMoveRobber && (
-                        <p className="build-prompt">Click the board to place your {buildingMode.toLowerCase()}!</p>
-                     )}
-                     
-                     <div className="trade-actions" style={{ opacity: gameState.mustMoveRobber ? 0.3 : 1, pointerEvents: gameState.mustMoveRobber ? 'none' : 'auto' }}>
-                       <p><strong>Bank Trade</strong></p>
-                       <div className="trade-ui">
-                         <label>
-                           Offer:
-                           <select value={tradeOffer} onChange={e => setTradeOffer(e.target.value)}>
-                             <option value="Wood">Wood</option>
-                             <option value="Brick">Brick</option>
-                             <option value="Sheep">Sheep</option>
-                             <option value="Wheat">Wheat</option>
-                             <option value="Ore">Ore</option>
-                           </select>
-                         </label>
-                         <span> &rarr; </span>
-                         <label>
-                           Request:
-                           <select value={tradeRequest} onChange={e => setTradeRequest(e.target.value)}>
-                             <option value="Wood">Wood</option>
-                             <option value="Brick">Brick</option>
-                             <option value="Sheep">Sheep</option>
-                             <option value="Wheat">Wheat</option>
-                             <option value="Ore">Ore</option>
-                           </select>
-                         </label>
-                         <button 
-                           className={getButtonClass(false, canAffordTrade && tradeOffer !== tradeRequest && gameState.hasRolled)}
-                           onClick={handleBankTrade}
-                           disabled={!canAffordTrade || tradeOffer === tradeRequest || !gameState.hasRolled}
-                         >
-                           Trade {tradeRate} {tradeOffer} for 1 {tradeRequest}
-                         </button>
-                       </div>
-                     </div>
-                   </>
-                 )}
-               </>
-             ) : (
-               <p>Waiting for {activePlayerName}'s turn...</p>
-             )}
+            {isMyTurn ? (
+              <>
+                <p><strong>Your Turn</strong></p>
+                {gameState.mustMoveRobber && (
+                  <p className="build-prompt">You must move the robber! Click a hex on the board.</p>
+                )}
+                {gameState.phase === 'MAIN' && (
+                  <>
+                    <div className="main-actions">
+                      <button className="action-btn" onClick={handleRollDice} disabled={gameState.hasRolled}>Roll Dice</button>
+                      <button className="action-btn" onClick={handleEndTurn} disabled={!gameState.hasRolled || gameState.mustMoveRobber}>End Turn</button>
+                    </div>
+                    <div className="purchase-actions" style={{ opacity: (!gameState.hasRolled || gameState.mustMoveRobber) ? 0.3 : 1 }}>
+                      <button className={getButtonClass(buildingMode === 'ROAD', canAffordRoad)} onClick={() => setBuildingMode(buildingMode === 'ROAD' ? null : 'ROAD')}>Road</button>
+                      <button className={getButtonClass(buildingMode === 'SETTLEMENT', canAffordSettlement)} onClick={() => setBuildingMode(buildingMode === 'SETTLEMENT' ? null : 'SETTLEMENT')}>Settlement</button>
+                      <button className={getButtonClass(buildingMode === 'CITY', canAffordCity)} onClick={() => setBuildingMode(buildingMode === 'CITY' ? null : 'CITY')}>City</button>
+                      <button className={getButtonClass(false, canAffordDevCard)} onClick={handleDrawDevCard}>Dev Card</button>
+                    </div>
+                    <div className="trade-actions">
+                      <select value={tradeOffer} onChange={e => setTradeOffer(e.target.value)}>{['Wood','Brick','Sheep','Wheat','Ore'].map(r => <option key={r} value={r}>{r}</option>)}</select>
+                      <span>&rarr;</span>
+                      <select value={tradeRequest} onChange={e => setTradeRequest(e.target.value)}>{['Wood','Brick','Sheep','Wheat','Ore'].map(r => <option key={r} value={r}>{r}</option>)}</select>
+                      <button disabled={!canAffordTrade || !gameState.hasRolled} onClick={handleBankTrade}>Trade {tradeRate}:1</button>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : <p>Waiting for {activePlayerName}...</p>}
           </div>
         </div>
       )}
 
-      {diceRoll && gameState.phase === 'MAIN' && (
-        <div className="dice-result">
-          <h3>Last Roll: {diceRoll.d1} + {diceRoll.d2} = {diceRoll.roll}</h3>
+      {/* Interactive Overlays */}
+      {devCardAction && (
+        <div className="overlay">
+          <div className="overlay-content">
+            <h3>{devCardAction.type === 'Year of Plenty' ? 'Pick 2 Resources' : 'Pick Resource to Steal'}</h3>
+            <p>{devCardAction.type === 'Year of Plenty' && `Selected: ${devCardAction.selection.join(', ')}`}</p>
+            <div className="resource-picker">
+              {['Wood','Brick','Sheep','Wheat','Ore'].map(res => (
+                <button key={res} onClick={() => handleDevCardResourceSelect(res)}>{res}</button>
+              ))}
+            </div>
+            <button onClick={() => setDevCardAction(null)}>Cancel</button>
+          </div>
         </div>
       )}
 
-      {/* Discard Overlay */}
-      {gameState.discardingPlayers && gameState.discardingPlayers.find(dp => dp.id === playerId) && (
+      {gameState.discardingPlayers?.find(dp => dp.id === playerId) && (
         <div className="overlay">
           <div className="overlay-content">
-            <h3>You must discard {gameState.discardingPlayers.find(dp => dp.id === playerId).count} cards!</h3>
+            <h3>Discard {gameState.discardingPlayers.find(dp => dp.id === playerId).count} Cards</h3>
             <div className="discard-selectors">
-              {['Wood', 'Brick', 'Sheep', 'Wheat', 'Ore'].map(res => (
+              {['Wood','Brick','Sheep','Wheat','Ore'].map(res => (
                 <div key={res} className="discard-row">
-                  <span>{res} ({player.resources[res]} available):</span>
+                  <span>{res}: {player.resources[res]}</span>
                   <div className="discard-controls">
-                    <button onClick={() => handleDiscardChange(res, -1)} disabled={discardSelection[res] === 0}>-</button>
+                    <button onClick={() => handleDiscardChange(res, -1)} disabled={discardSelection[res] <= 0}>-</button>
                     <span>{discardSelection[res]}</span>
-                    <button onClick={() => handleDiscardChange(res, 1)} disabled={discardSelection[res] === player.resources[res]}>+</button>
+                    <button onClick={() => handleDiscardChange(res, 1)} disabled={discardSelection[res] >= player.resources[res]}>+</button>
                   </div>
                 </div>
               ))}
             </div>
-            <p>Selected: {Object.values(discardSelection).reduce((a, b) => a + b, 0)} / {gameState.discardingPlayers.find(dp => dp.id === playerId).count}</p>
-            <button 
-              className="action-btn"
-              onClick={handleDiscardSubmit} 
-              disabled={Object.values(discardSelection).reduce((a, b) => a + b, 0) !== gameState.discardingPlayers.find(dp => dp.id === playerId).count}
-            >
-              Confirm Discard
-            </button>
+            <button onClick={handleDiscardSubmit}>Confirm Discard</button>
           </div>
         </div>
       )}
 
-      {/* Victim Selection Overlay */}
       {robberTargetHex && (
         <div className="overlay">
           <div className="overlay-content">
-            <h3>Choose a player to rob:</h3>
-            <div className="victim-buttons">
-              {robberTargetHex.victims.map(vid => {
-                const victim = gameState.players.find(p => p.id === vid);
-                return (
-                  <button key={vid} onClick={() => handleVictimSelect(vid)} style={{ backgroundColor: victim.color, color: 'white', padding: '10px', margin: '5px', borderRadius: '5px', border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>
-                    {victim.name}
-                  </button>
-                );
-              })}
-            </div>
-            <button onClick={() => setRobberTargetHex(null)} style={{ marginTop: '10px' }}>Cancel</button>
+            <h3>Rob a player:</h3>
+            {robberTargetHex.victims.map(vid => (
+              <button key={vid} onClick={() => handleVictimSelect(vid)} style={{ background: gameState.players.find(p => p.id === vid).color }}>{gameState.players.find(p => p.id === vid).name}</button>
+            ))}
           </div>
         </div>
       )}
@@ -402,9 +388,9 @@ function App() {
         edges={gameState.edges} 
         players={gameState.players}
         robberHexId={gameState.robberHexId}
-        onNodeClick={isMyTurn && !gameState.mustMoveRobber && gameState.discardingPlayers.length === 0 && (gameState.phase === 'INITIAL_SETUP' || buildingMode === 'SETTLEMENT' || buildingMode === 'CITY') ? handleNodeClick : null}
-        onEdgeClick={isMyTurn && !gameState.mustMoveRobber && gameState.discardingPlayers.length === 0 && (gameState.phase === 'INITIAL_SETUP' || buildingMode === 'ROAD') ? handleEdgeClick : null}
-        onHexClick={isMyTurn && gameState.mustMoveRobber && gameState.discardingPlayers.length === 0 ? handleHexClick : null}
+        onNodeClick={isMyTurn && !gameState.mustMoveRobber ? handleNodeClick : null}
+        onEdgeClick={isMyTurn && !gameState.mustMoveRobber ? handleEdgeClick : null}
+        onHexClick={isMyTurn && gameState.mustMoveRobber ? handleHexClick : null}
       />
     </div>
   );
