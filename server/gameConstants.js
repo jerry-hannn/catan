@@ -1,0 +1,38 @@
+const RESOURCES = {
+  WOOD: 'Wood',
+  BRICK: 'Brick',
+  SHEEP: 'Sheep',
+  WHEAT: 'Wheat',
+  ORE: 'Ore',
+  DESERT: 'Desert'
+};
+
+const BUILDING_COSTS = {
+  ROAD: { [RESOURCES.WOOD]: 1, [RESOURCES.BRICK]: 1 },
+  SETTLEMENT: { [RESOURCES.WOOD]: 1, [RESOURCES.BRICK]: 1, [RESOURCES.WHEAT]: 1, [RESOURCES.SHEEP]: 1 },
+  CITY: { [RESOURCES.WHEAT]: 2, [RESOURCES.ORE]: 3 },
+  DEV_CARD: { [RESOURCES.WHEAT]: 1, [RESOURCES.SHEEP]: 1, [RESOURCES.ORE]: 1 }
+};
+
+const DEV_CARD_TYPES = {
+  KNIGHT: 'Knight',
+  VICTORY_POINT: 'Victory Point',
+  YEAR_OF_PLENTY: 'Year of Plenty',
+  MONOPOLY: 'Monopoly',
+  ROAD_BUILDING: 'Road Building'
+};
+
+const INITIAL_DEV_CARDS = [
+  ...Array(14).fill(DEV_CARD_TYPES.KNIGHT),
+  ...Array(5).fill(DEV_CARD_TYPES.VICTORY_POINT),
+  ...Array(2).fill(DEV_CARD_TYPES.YEAR_OF_PLENTY),
+  ...Array(2).fill(DEV_CARD_TYPES.MONOPOLY),
+  ...Array(2).fill(DEV_CARD_TYPES.ROAD_BUILDING)
+];
+
+module.exports = {
+  RESOURCES,
+  BUILDING_COSTS,
+  DEV_CARD_TYPES,
+  INITIAL_DEV_CARDS
+};
