@@ -9,6 +9,10 @@ const { INITIAL_DEV_CARDS } = require('./gameConstants');
 const app = express();
 app.use(cors()); // Allow all origins
 
+app.get('/', (req, res) => {
+  res.send('Catan backend is live and running!');
+});
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
