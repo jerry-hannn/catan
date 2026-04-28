@@ -1,4 +1,4 @@
-# Hosting Guide for Multiplayer Catan Clone
+# Hosting Guide for Multiplayer Catan
 
 Follow these steps to host the game on your laptop and allow your friends to connect over the internet using Ngrok.
 

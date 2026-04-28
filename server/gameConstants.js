@@ -4,8 +4,27 @@ const RESOURCES = {
   SHEEP: 'Sheep',
   WHEAT: 'Wheat',
   ORE: 'Ore',
-  DESERT: 'Desert'
+  DESERT: 'Desert',
+  OCEAN: 'Ocean'
 };
+
+const PORT_TYPES = {
+  THREE_TO_ONE: '3:1',
+  WOOD_2_TO_1: 'Wood 2:1',
+  BRICK_2_TO_1: 'Brick 2:1',
+  SHEEP_2_TO_1: 'Sheep 2:1',
+  WHEAT_2_TO_1: 'Wheat 2:1',
+  ORE_2_TO_1: 'Ore 2:1'
+};
+
+const INITIAL_PORTS = [
+  ...Array(4).fill(PORT_TYPES.THREE_TO_ONE),
+  PORT_TYPES.WOOD_2_TO_1,
+  PORT_TYPES.BRICK_2_TO_1,
+  PORT_TYPES.SHEEP_2_TO_1,
+  PORT_TYPES.WHEAT_2_TO_1,
+  PORT_TYPES.ORE_2_TO_1
+];
 
 const BUILDING_COSTS = {
   ROAD: { [RESOURCES.WOOD]: 1, [RESOURCES.BRICK]: 1 },
@@ -32,6 +51,8 @@ const INITIAL_DEV_CARDS = [
 
 module.exports = {
   RESOURCES,
+  PORT_TYPES,
+  INITIAL_PORTS,
   BUILDING_COSTS,
   DEV_CARD_TYPES,
   INITIAL_DEV_CARDS
