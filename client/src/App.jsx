@@ -18,6 +18,7 @@ function App() {
 
   const [pendingSettlement, setPendingSettlement] = useState(null);
   const [pendingRoad, setPendingRoad] = useState(null);
+  const [activeModal, setActiveModal] = useState(null); // 'build', 'trade', 'devCards'
 
   const [playerName, setPlayerName] = useState('');
   const [playerColor, setPlayerColor] = useState('#e63946');
@@ -105,9 +106,9 @@ function App() {
   };
 
   const handleConfirmSetup = () => {
-    if (pendingSettlement) {
+    if (pendingSettlement !== null) {
       socket.emit('build_settlement', { nodeId: pendingSettlement });
-    } else if (pendingRoad) {
+    } else if (pendingRoad !== null) {
       socket.emit('build_road', { edgeId: pendingRoad });
     }
   };
@@ -214,7 +215,7 @@ function App() {
 
   if (gameState.phase === 'LOBBY') {
     return (
-      <div className="App">
+      <div className="App App-lobby">
         <h1>Settlers of Catan - Lobby</h1>
         {!player ? (
           <form onSubmit={handleJoin} className="lobby-form">
@@ -247,7 +248,7 @@ function App() {
     const isHost = gameState.turnOrder[0] === playerId;
 
     return (
-      <div className="App game-over-screen">
+      <div className="App App-lobby game-over-screen">
         <h1 className="winner-announcement" style={{ color: winner.color }}>
           {winner.name} Wins!
         </h1>
@@ -271,7 +272,11 @@ function App() {
                   <td><strong>{p.vp}</strong></td>
                   <td>{p.settlementCount}</td>
                   <td>{p.cityCount}</td>
-                  <td>{p.id === gameState.largestArmyPlayer ? "Largest Army (2)" : "-"}</td>
+                  <td>
+                    {p.id === gameState.largestArmyPlayer && <div>Largest Army ({p.knightsPlayed} Knights)</div>}
+                    {p.id === gameState.longestRoadPlayer && <div>Longest Road ({p.longestRoad} segments)</div>}
+                    {p.id !== gameState.largestArmyPlayer && p.id !== gameState.longestRoadPlayer && "-"}
+                  </td>
                   <td>{p.vpCardCount}</td>
                 </tr>
               ))}
@@ -326,185 +331,233 @@ function App() {
 
   return (
     <div className="App">
-      <h1>Settlers of Catan</h1>
-      
-      {gameState.lastRoll && (
-        <div className="dice-result">
-          <h3>Roll: {gameState.lastRoll.roll} ({gameState.lastRoll.d1} + {gameState.lastRoll.d2})</h3>
-        </div>
-      )}
-
-      {player && (
-        <div className="player-info" style={{ borderColor: player.color }}>
-          <h2>{player.name} {player.vp >= 10 && "(WINNER!)"}</h2>
-          <div className="stats-row">
-            <span>VP: {player.vp}</span>
-            <span> Knights: {player.knightsPlayed}</span>
-          </div>
-          
-          {gameState.phase === 'INITIAL_SETUP' && (
-             <div className="setup-info">
-               <p className="phase-indicator"><strong>Phase: Initial Setup</strong></p>
-               {isMyTurn && (
-                 <>
-                   <p className="instruction">
-                     {!gameState.setupState.settlementPlaced 
-                       ? "Click on an intersection to build your Settlement." 
-                       : "Now click on an adjacent edge to build your Road."}
-                   </p>
-                   {(pendingSettlement !== null || pendingRoad !== null) && (
-                     <button className="action-btn" onClick={handleConfirmSetup}>Confirm Placement</button>
-                   )}
-                 </>
-               )}
-             </div>
-          )}
-
-          {gameState.phase === 'MAIN' && (
-            <>
-              <div className="resources">
-                <span title="Wood"><GiWoodPile /> {player.resources.Wood}</span>
-                <span title="Brick"><GiBrickWall /> {player.resources.Brick}</span>
-                <span title="Sheep"><GiSheep /> {player.resources.Sheep}</span>
-                <span title="Wheat"><GiWheat /> {player.resources.Wheat}</span>
-                <span title="Ore"><GiOre /> {player.resources.Ore}</span>
+      <div className="sidebar">
+        {player && (
+          <>
+            <div className="sidebar-section">
+              <h4>Player</h4>
+              <div className="player-info" style={{ borderColor: player.color, borderLeftWidth: '10px' }}>
+                <div style={{ fontWeight: 'bold', fontSize: '1.2rem' }}>{player.name}</div>
+                <div>VP: {player.vp} | Knights: {player.knightsPlayed} | Road: {player.longestRoad}</div>
               </div>
-              
-              <div className="dev-cards-held">
-                <h4>Your Dev Cards:</h4>
-                <div className="dev-cards-list">
-                  {player.devCards.map(card => (
-                    <button 
-                      key={card.id} 
-                      className={`dev-card ${card.canPlay && !gameState.hasPlayedDevCard && gameState.hasRolled ? 'playable' : 'unplayable'}`}
-                      disabled={!card.canPlay || gameState.hasPlayedDevCard || !isMyTurn || !gameState.hasRolled}
-                      onClick={() => handlePlayCard(card)}
-                      title={card.canPlay ? `Click to play ${card.type}` : "Cannot play on the turn you bought it"}
-                    >
-                      {card.type === 'Knight' && <GiSwordsEmblem />}
-                      {card.type === 'Victory Point' && <GiTrophy />}
-                      {card.type !== 'Knight' && card.type !== 'Victory Point' && <GiCardPlay />}
-                      <span>{card.type}</span>
-                    </button>
-                  ))}
-                  {player.devCards.length === 0 && <p>No cards held</p>}
-                </div>
-              </div>
-            </>
-          )}
+            </div>
 
-          <div className="controls">
-            {isMyTurn ? (
-              <>
-                <p><strong>Your Turn</strong></p>
-                {gameState.mustMoveRobber && (
-                  <p className="build-prompt">You must move the robber! Click a hex on the board.</p>
-                )}
-                {devCardAction?.type === 'Road Building' && (
-                  <div className="dev-card-prompt" style={{ marginBottom: '15px', padding: '10px', background: 'rgba(217, 119, 67, 0.1)', borderRadius: '8px' }}>
-                    <p className="build-prompt">Road Building: Click two edges on the board ({devCardAction.selection.length}/2)</p>
-                    {devCardAction.selection.length === 2 && (
-                      <button className="action-btn" onClick={handleConfirmRoadBuilding}>Confirm Road Building</button>
-                    )}
-                    <button className="purchase-btn" onClick={() => setDevCardAction(null)} style={{ marginLeft: '10px' }}>Cancel</button>
-                  </div>
-                )}
-                {gameState.phase === 'MAIN' && (
+            <div className="sidebar-section">
+              <h4>Resources</h4>
+              <div className="resource-grid">
+                <div className="resource-item res-wood" title="Wood"><GiWoodPile /> {player.resources.Wood}</div>
+                <div className="resource-item res-brick" title="Brick"><GiBrickWall /> {player.resources.Brick}</div>
+                <div className="resource-item res-sheep" title="Sheep"><GiSheep /> {player.resources.Sheep}</div>
+                <div className="resource-item res-wheat" title="Wheat"><GiWheat /> {player.resources.Wheat}</div>
+                <div className="resource-item res-ore" title="Ore"><GiOre /> {player.resources.Ore}</div>
+              </div>
+            </div>
+
+            <div className="sidebar-section">
+              <h4>Actions</h4>
+              <div className="modal-actions">
+                {isMyTurn && gameState.phase === 'MAIN' && (
                   <>
-                    <div className="main-actions">
-                      <button 
-                        className="action-btn" 
-                        onClick={handleRollDice} 
-                        disabled={gameState.hasRolled}
-                        style={{ 
-                          opacity: gameState.hasRolled ? 0.5 : 1, 
-                          transition: 'opacity 0.5s ease-in-out'
-                        }}
-                      >
-                        Roll Dice
-                      </button>
-                      <button className="action-btn" onClick={handleEndTurn} disabled={!gameState.hasRolled || gameState.mustMoveRobber}>End Turn</button>
-                    </div>
-                    <div className="purchase-actions" style={{ opacity: (!gameState.hasRolled || gameState.mustMoveRobber) ? 0.3 : 1 }}>
-                      <button className={getButtonClass(buildingMode === 'ROAD', canAffordRoad)} onClick={() => setBuildingMode(buildingMode === 'ROAD' ? null : 'ROAD')}>Road</button>
-                      <button className={getButtonClass(buildingMode === 'SETTLEMENT', canAffordSettlement)} onClick={() => setBuildingMode(buildingMode === 'SETTLEMENT' ? null : 'SETTLEMENT')}>Settlement</button>
-                      <button className={getButtonClass(buildingMode === 'CITY', canAffordCity)} onClick={() => setBuildingMode(buildingMode === 'CITY' ? null : 'CITY')}>City</button>
-                      <button className={getButtonClass(false, canAffordDevCard)} onClick={handleDrawDevCard}>Dev Card</button>
-                    </div>
-                    <div className="trade-actions">
-                      <select value={tradeOffer} onChange={e => setTradeOffer(e.target.value)}>{['Wood','Brick','Sheep','Wheat','Ore'].map(r => <option key={r} value={r}>{r}</option>)}</select>
-                      <span>&rarr;</span>
-                      <select value={tradeRequest} onChange={e => setTradeRequest(e.target.value)}>{['Wood','Brick','Sheep','Wheat','Ore'].map(r => <option key={r} value={r}>{r}</option>)}</select>
-                      <button disabled={!canAffordTrade || !gameState.hasRolled} onClick={handleBankTrade}>Trade {tradeRate}:1</button>
-                    </div>
+                    {!gameState.hasRolled ? (
+                      <button className="action-btn" onClick={handleRollDice}>Roll Dice</button>
+                    ) : (
+                      <>
+                        <button className="action-btn" onClick={() => setActiveModal('build')}>Build...</button>
+                        <button className="action-btn" onClick={() => setActiveModal('trade')}>Trade...</button>
+                        <button className="action-btn" onClick={() => setActiveModal('devCards')}>Dev Cards ({player.devCards.length})</button>
+                        <button className="action-btn" onClick={handleEndTurn} disabled={gameState.mustMoveRobber}>End Turn</button>
+                      </>
+                    )}
                   </>
                 )}
+                {!isMyTurn && <p>Waiting for {activePlayerName}...</p>}
+              </div>
+            </div>
+
+            <div className="sidebar-dice">
+              <h4>Last Roll</h4>
+              <div className="dice-result">
+                {gameState.lastRoll ? (
+                  <h3>{gameState.lastRoll.roll} ({gameState.lastRoll.d1}+{gameState.lastRoll.d2})</h3>
+                ) : (
+                  <h3>-</h3>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="main-content">
+        <h1>Settlers of Catan</h1>
+
+        {gameState.phase === 'INITIAL_SETUP' && (
+          <div className="player-info" style={{ maxWidth: '500px', marginBottom: '20px' }}>
+            <p className="phase-indicator"><strong>Phase: Initial Setup</strong></p>
+            {isMyTurn && (
+              <>
+                <p className="instruction">
+                  {!gameState.setupState.settlementPlaced 
+                    ? "Click on an intersection to build your Settlement." 
+                    : "Now click on an adjacent edge to build your Road."}
+                </p>
+                {(pendingSettlement !== null || pendingRoad !== null) && (
+                  <button className="action-btn" onClick={handleConfirmSetup}>Confirm Placement</button>
+                )}
               </>
-            ) : <p>Waiting for {activePlayerName}...</p>}
+            )}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Interactive Overlays */}
-      {devCardAction && (devCardAction.type === 'Year of Plenty' || devCardAction.type === 'Monopoly') && (
-        <div className="overlay">
-          <div className="overlay-content">
-            <h3>{devCardAction.type === 'Year of Plenty' ? 'Pick 2 Resources' : 'Pick Resource to Steal'}</h3>
-            <p>{devCardAction.type === 'Year of Plenty' && `Selected: ${devCardAction.selection.join(', ')}`}</p>
-            <div className="resource-picker">
-              {['Wood','Brick','Sheep','Wheat','Ore'].map(res => (
-                <button key={res} onClick={() => handleDevCardResourceSelect(res)}>{res}</button>
-              ))}
-            </div>
-            <button onClick={() => setDevCardAction(null)}>Cancel</button>
+        {devCardAction?.type === 'Road Building' && (
+          <div className="player-info" style={{ maxWidth: '500px', marginBottom: '20px', background: 'rgba(217, 119, 67, 0.1)' }}>
+            <p className="build-prompt">Road Building: Click two edges on the board ({devCardAction.selection.length}/2)</p>
+            {devCardAction.selection.length === 2 && (
+              <button className="action-btn" onClick={handleConfirmRoadBuilding}>Confirm Road Building</button>
+            )}
+            <button className="purchase-btn" onClick={() => setDevCardAction(null)} style={{ marginLeft: '10px' }}>Cancel</button>
           </div>
-        </div>
-      )}
+        )}
 
-      {gameState.discardingPlayers?.find(dp => dp.id === playerId) && (
-        <div className="overlay">
-          <div className="overlay-content">
-            <h3>Discard {gameState.discardingPlayers.find(dp => dp.id === playerId).count} Cards</h3>
-            <div className="discard-selectors">
-              {['Wood','Brick','Sheep','Wheat','Ore'].map(res => (
-                <div key={res} className="discard-row">
-                  <span>{res}: {player.resources[res]}</span>
-                  <div className="discard-controls">
-                    <button onClick={() => handleDiscardChange(res, -1)} disabled={discardSelection[res] <= 0}>-</button>
-                    <span>{discardSelection[res]}</span>
-                    <button onClick={() => handleDiscardChange(res, 1)} disabled={discardSelection[res] >= player.resources[res]}>+</button>
-                  </div>
+        {isMyTurn && gameState.mustMoveRobber && (
+          <p className="build-prompt" style={{ fontSize: '1.5rem' }}>You must move the robber! Click a hex on the board.</p>
+        )}
+
+        <Board 
+          board={gameState.board} 
+          nodes={gameState.nodes} 
+          edges={gameState.edges} 
+          players={gameState.players}
+          robberHexId={gameState.robberHexId}
+          pendingSettlementNodeId={pendingSettlement}
+          pendingRoadEdgeIds={devCardAction?.type === 'Road Building' ? devCardAction.selection : (pendingRoad !== null ? [pendingRoad] : [])}
+          onNodeClick={isMyTurn && !gameState.mustMoveRobber ? handleNodeClick : null}
+          onEdgeClick={isMyTurn && !gameState.mustMoveRobber ? handleEdgeClick : null}
+          onHexClick={isMyTurn && gameState.mustMoveRobber ? handleHexClick : null}
+        />
+
+        {/* MODALS */}
+        {activeModal === 'build' && (
+          <div className="overlay" onClick={() => setActiveModal(null)}>
+            <div className="overlay-content" onClick={e => e.stopPropagation()}>
+              <h3>Build Structures</h3>
+              <div className="modal-actions">
+                <div className="modal-row">
+                  <button className={getButtonClass(buildingMode === 'ROAD', canAffordRoad)} onClick={() => { setBuildingMode('ROAD'); setActiveModal(null); }}>Road</button>
+                  <span>1 Wood, 1 Brick</span>
                 </div>
+                <div className="modal-row">
+                  <button className={getButtonClass(buildingMode === 'SETTLEMENT', canAffordSettlement)} onClick={() => { setBuildingMode('SETTLEMENT'); setActiveModal(null); }}>Settlement</button>
+                  <span>1 Wood, 1 Brick, 1 Sheep, 1 Wheat</span>
+                </div>
+                <div className="modal-row">
+                  <button className={getButtonClass(buildingMode === 'CITY', canAffordCity)} onClick={() => { setBuildingMode('CITY'); setActiveModal(null); }}>City</button>
+                  <span>2 Wheat, 3 Ore</span>
+                </div>
+                <div className="modal-row">
+                  <button className={getButtonClass(false, canAffordDevCard)} onClick={() => { handleDrawDevCard(); setActiveModal(null); }}>Dev Card</button>
+                  <span>1 Sheep, 1 Wheat, 1 Ore</span>
+                </div>
+              </div>
+              <button className="purchase-btn" style={{ marginTop: '20px' }} onClick={() => setActiveModal(null)}>Close</button>
+            </div>
+          </div>
+        )}
+
+        {activeModal === 'trade' && (
+          <div className="overlay" onClick={() => setActiveModal(null)}>
+            <div className="overlay-content" onClick={e => e.stopPropagation()}>
+              <h3>Bank Trade ({tradeRate}:1)</h3>
+              <div className="trade-modal-ui">
+                <div>
+                  <label>Offer: </label>
+                  <select value={tradeOffer} onChange={e => setTradeOffer(e.target.value)}>{['Wood','Brick','Sheep','Wheat','Ore'].map(r => <option key={r} value={r}>{r}</option>)}</select>
+                </div>
+                <div>&darr;</div>
+                <div>
+                  <label>Receive: </label>
+                  <select value={tradeRequest} onChange={e => setTradeRequest(e.target.value)}>{['Wood','Brick','Sheep','Wheat','Ore'].map(r => <option key={r} value={r}>{r}</option>)}</select>
+                </div>
+                <button className="action-btn" disabled={!canAffordTrade} onClick={() => { handleBankTrade(); setActiveModal(null); }}>Confirm Trade</button>
+              </div>
+              <button className="purchase-btn" style={{ marginTop: '20px' }} onClick={() => setActiveModal(null)}>Close</button>
+            </div>
+          </div>
+        )}
+
+        {activeModal === 'devCards' && (
+          <div className="overlay" onClick={() => setActiveModal(null)}>
+            <div className="overlay-content" style={{ minWidth: '400px' }} onClick={e => e.stopPropagation()}>
+              <h3>Your Development Cards</h3>
+              <div className="dev-card-grid">
+                {player.devCards.map(card => (
+                  <button 
+                    key={card.id} 
+                    className={`dev-card ${card.canPlay && !gameState.hasPlayedDevCard && gameState.hasRolled ? 'playable' : 'unplayable'}`}
+                    disabled={!card.canPlay || gameState.hasPlayedDevCard || !isMyTurn || !gameState.hasRolled}
+                    onClick={() => { handlePlayCard(card); setActiveModal(null); }}
+                  >
+                    {card.type === 'Knight' && <GiSwordsEmblem />}
+                    {card.type === 'Victory Point' && <GiTrophy />}
+                    {card.type !== 'Knight' && card.type !== 'Victory Point' && <GiCardPlay />}
+                    <span>{card.type}</span>
+                  </button>
+                ))}
+                {player.devCards.length === 0 && <p>No cards held</p>}
+              </div>
+              <button className="purchase-btn" style={{ marginTop: '20px' }} onClick={() => setActiveModal(null)}>Close</button>
+            </div>
+          </div>
+        )}
+
+        {/* Overlays from previous implementation */}
+        {devCardAction && (devCardAction.type === 'Year of Plenty' || devCardAction.type === 'Monopoly') && (
+          <div className="overlay">
+            <div className="overlay-content">
+              <h3>{devCardAction.type === 'Year of Plenty' ? 'Pick 2 Resources' : 'Pick Resource to Steal'}</h3>
+              <p>{devCardAction.type === 'Year of Plenty' && `Selected: ${devCardAction.selection.join(', ')}`}</p>
+              <div className="resource-picker">
+                {['Wood','Brick','Sheep','Wheat','Ore'].map(res => (
+                  <button key={res} onClick={() => handleDevCardResourceSelect(res)}>{res}</button>
+                ))}
+              </div>
+              <button onClick={() => setDevCardAction(null)}>Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {gameState.discardingPlayers?.find(dp => dp.id === playerId) && (
+          <div className="overlay">
+            <div className="overlay-content">
+              <h3>Discard {gameState.discardingPlayers.find(dp => dp.id === playerId).count} Cards</h3>
+              <div className="discard-selectors">
+                {['Wood','Brick','Sheep','Wheat','Ore'].map(res => (
+                  <div key={res} className="discard-row">
+                    <span>{res}: {player.resources[res]}</span>
+                    <div className="discard-controls">
+                      <button onClick={() => handleDiscardChange(res, -1)} disabled={discardSelection[res] <= 0}>-</button>
+                      <span>{discardSelection[res]}</span>
+                      <button onClick={() => handleDiscardChange(res, 1)} disabled={discardSelection[res] >= player.resources[res]}>+</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button onClick={handleDiscardSubmit}>Confirm Discard</button>
+            </div>
+          </div>
+        )}
+
+        {robberTargetHex && (
+          <div className="overlay">
+            <div className="overlay-content">
+              <h3>Rob a player:</h3>
+              {robberTargetHex.victims.map(vid => (
+                <button key={vid} onClick={() => handleVictimSelect(vid)} style={{ background: gameState.players.find(p => p.id === vid).color }}>{gameState.players.find(p => p.id === vid).name}</button>
               ))}
             </div>
-            <button onClick={handleDiscardSubmit}>Confirm Discard</button>
           </div>
-        </div>
-      )}
-
-      {robberTargetHex && (
-        <div className="overlay">
-          <div className="overlay-content">
-            <h3>Rob a player:</h3>
-            {robberTargetHex.victims.map(vid => (
-              <button key={vid} onClick={() => handleVictimSelect(vid)} style={{ background: gameState.players.find(p => p.id === vid).color }}>{gameState.players.find(p => p.id === vid).name}</button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <Board 
-        board={gameState.board} 
-        nodes={gameState.nodes} 
-        edges={gameState.edges} 
-        players={gameState.players}
-        robberHexId={gameState.robberHexId}
-        pendingSettlementNodeId={pendingSettlement}
-        pendingRoadEdgeIds={devCardAction?.type === 'Road Building' ? devCardAction.selection : (pendingRoad ? [pendingRoad] : [])}
-        onNodeClick={isMyTurn && !gameState.mustMoveRobber ? handleNodeClick : null}
-        onEdgeClick={isMyTurn && !gameState.mustMoveRobber ? handleEdgeClick : null}
-        onHexClick={isMyTurn && gameState.mustMoveRobber ? handleHexClick : null}
-      />
+        )}
+      </div>
     </div>
   );
 }

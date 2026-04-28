@@ -1,20 +1,239 @@
 .App {
   text-align: center;
+  display: flex;
+  flex-direction: row;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background-color: #f0f2f5;
+}
+
+/* SIDEBAR STYLES */
+.sidebar {
+  width: 320px;
+  min-width: 320px;
+  background: var(--card-bg);
+  border-right: 2px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  overflow-y: auto;
+  box-shadow: 4px 0 10px rgba(0,0,0,0.05);
+  z-index: 10;
+}
+
+.sidebar h2 {
+  margin-top: 0;
+  font-size: 1.5rem;
+  border-bottom: 2px solid var(--border-color);
+  padding-bottom: 10px;
+  margin-bottom: 20px;
+}
+
+.sidebar-section {
+  margin-bottom: 25px;
+  text-align: left;
+}
+
+.sidebar-section h4 {
+  margin-bottom: 10px;
+  color: var(--secondary-color);
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  letter-spacing: 1px;
+}
+
+.resource-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.resource-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fdf8ef;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 2px solid var(--border-color);
+  font-weight: bold;
+  transition: transform 0.2s;
+}
+
+.resource-item:hover {
+  transform: scale(1.05);
+}
+
+.res-wood { background-color: #e8f5e9 !important; border-color: #2e7d32 !important; color: #1b5e20 !important; }
+.res-brick { background-color: #ffebee !important; border-color: #c62828 !important; color: #b71c1c !important; }
+.res-sheep { background-color: #f1f8e9 !important; border-color: #689f38 !important; color: #33691e !important; }
+.res-wheat { background-color: #fff8e1 !important; border-color: #fbc02d !important; color: #f57f17 !important; }
+.res-ore { background-color: #eceff1 !important; border-color: #546e7a !important; color: #263238 !important; }
+
+/* Fixed height for actions to prevent jitter */
+.sidebar .modal-actions {
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 12px;
+}
+
+.sidebar-dice {
+  margin-top: auto;
+  padding-top: 20px;
+  border-top: 2px dashed var(--border-color);
+}
+
+.main-content {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px;
+  position: relative;
+}
+
+.main-content h1 {
+  margin-top: 0;
+  margin-bottom: 20px;
+}
+
+/* MODAL / OVERLAY ENHANCEMENTS */
+.overlay-content {
+  background: var(--card-bg);
+  padding: 35px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  border: 3px solid var(--border-color);
+  min-width: 350px;
+  font-size: 1.1rem;
+}
+
+.overlay-content h3 {
+  font-size: 1.8rem;
+  margin-bottom: 25px;
+  color: var(--text-color);
+}
+
+.modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.modal-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding: 10px;
+  background: #f9f8f6;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-color);
+}
+
+.modal-row span {
+  font-weight: 600;
+  color: var(--secondary-color);
+}
+
+/* Ensure all buttons in modals look like trade buttons */
+.overlay-content button {
+  border-radius: var(--radius);
+  font-weight: bold;
+}
+
+.trade-modal-ui {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+  align-items: center;
+  padding: 15px;
+}
+
+.trade-modal-ui select {
+  font-size: 1.2rem;
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 3px solid var(--border-color);
+  background: #faf9f7;
+  margin: 0 10px;
+  cursor: pointer;
+}
+
+.dev-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 15px;
+  margin-top: 20px;
+}
+
+.dev-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  border-radius: var(--radius);
+  border: 3px solid var(--border-color);
+  background: #fdf8ef;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-height: 120px;
+  gap: 10px;
+  font-size: 1.1rem;
+}
+
+.dev-card.playable {
+  border-color: var(--secondary-color);
+  box-shadow: 0 4px 0 var(--secondary-color);
+}
+
+.dev-card.playable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 0 var(--secondary-color);
+}
+
+.dev-card.unplayable {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: #eee;
+}
+
+.dev-card span {
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+.trade-modal-ui select {
+  font-size: 1.1rem;
+  padding: 10px;
+  border-radius: var(--radius);
+  border: 2px solid var(--border-color);
+  background: #faf9f7;
+  margin: 0 10px;
+}
+
+/* OLD STYLES ADJUSTMENT */
+.App-lobby {
+  display: block;
   max-width: 900px;
   margin: 40px auto;
   padding: 0 20px;
 }
 
-h1 {
-  font-size: 3rem;
-  font-weight: 800;
-  color: var(--primary-color);
-  text-shadow: 2px 2px 0px rgba(0,0,0,0.1);
-  margin-bottom: 30px;
-  letter-spacing: 1px;
+.player-info {
+  background: var(--card-bg);
+  border: 4px solid;
+  padding: 15px;
+  margin: 10px 0;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  width: 100%;
 }
-
-/* LOBBY STYLES */
 .lobby-form {
   background: var(--card-bg);
   padding: 30px;
@@ -33,7 +252,7 @@ h1 {
   width: 100%;
   padding: 12px 15px;
   font-size: 1.1rem;
-  border-radius: 8px;
+  border-radius: var(--radius);
   border: 2px solid var(--border-color);
   background-color: #faf9f7;
   transition: border-color 0.2s;
@@ -57,7 +276,7 @@ h1 {
   height: 45px;
   padding: 2px;
   border: 2px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius);
   cursor: pointer;
   background: #fff;
 }
@@ -71,7 +290,7 @@ h1 {
   background-color: var(--primary-color);
   color: white;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius);
   transition: transform 0.1s, box-shadow 0.1s, background-color 0.2s;
   box-shadow: 0 4px 0 #b3592a;
 }
@@ -136,7 +355,7 @@ h1 {
   padding: 12px 15px;
   background-color: #f9f8f6;
   margin-bottom: 8px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   font-size: 1.1rem;
   border-left: 6px solid;
   display: flex;
@@ -213,7 +432,7 @@ h1 {
   background-color: #fdf8ef;
   color: var(--text-color);
   border: 2px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius);
   transition: all 0.2s;
   box-shadow: 0 3px 0 var(--border-color);
 }
@@ -236,17 +455,30 @@ h1 {
 .action-btn {
   background-color: var(--secondary-color) !important;
   color: white !important;
-  border-color: #386044 !important;
-  box-shadow: 0 3px 0 #386044 !important;
+  border: 3px solid #386044 !important;
+  border-radius: var(--radius);
+  padding: 12px 24px !important;
+  font-size: 1.2rem !important;
+  font-weight: bold !important;
+  transition: all 0.2s ease !important;
+  box-shadow: none !important;
 }
 
 .action-btn:hover {
   background-color: #558c65 !important;
-  box-shadow: 0 5px 0 #386044 !important;
+  border-color: #2d4a33 !important;
+  transform: translateY(-2px);
 }
 
 .action-btn:active {
-  box-shadow: 0 0 0 #386044 !important;
+  transform: translateY(0);
+  background-color: #386044 !important;
+}
+
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .purchase-actions {
@@ -258,6 +490,7 @@ h1 {
 
 .purchase-btn {
   opacity: 0.6;
+  border-radius: var(--radius);
 }
 
 .purchase-btn.affordable {
@@ -326,7 +559,7 @@ h1 {
   font-size: 1rem;
   padding: 8px;
   border: 2px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius);
   margin-left: 5px;
   background-color: #faf9f7;
 }
@@ -396,14 +629,18 @@ h1 {
 }
 
 .discard-controls button {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
+  width: 35px;
+  height: 35px;
+  border-radius: var(--radius);
   border: none;
   background: var(--primary-color);
   color: white;
   font-weight: bold;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
 }
 
 .discard-controls button:disabled {

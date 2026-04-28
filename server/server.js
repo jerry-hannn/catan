@@ -55,6 +55,13 @@ const createInitialGameState = () => {
 
 let gameState = createInitialGameState();
 
+const checkWinner = () => {
+  const winner = gameState.players.find(p => p.vp >= 10);
+  if (winner) {
+    gameState.phase = 'GAME_OVER';
+  }
+};
+
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
   socket.emit('gameStateUpdate', gameState);
@@ -82,13 +89,6 @@ io.on('connection', (socket) => {
       io.emit('gameStateUpdate', gameState);
     }
   });
-
-  const checkWinner = () => {
-    const winner = gameState.players.find(p => p.vp >= 10);
-    if (winner) {
-      gameState.phase = 'GAME_OVER';
-    }
-  };
 
   socket.on('start_game', () => {
     if (gameState.phase !== 'LOBBY' || gameState.players.length === 0) return;
@@ -147,6 +147,7 @@ io.on('connection', (socket) => {
     } else {
       p.resources.Wood -= 1; p.resources.Brick -= 1; p.resources.Wheat -= 1; p.resources.Sheep -= 1;
     }
+    evaluateSpecialConditions();
     io.emit('gameStateUpdate', gameState);
   });
 
@@ -415,6 +416,7 @@ io.on('connection', (socket) => {
       settlementCount: 0,
       cityCount: 0,
       vpCardCount: 0,
+      longestRoad: 0,
       knightsPlayed: 0
     }));
     const turnOrder = players.map(p => p.id);
@@ -424,6 +426,40 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => console.log(`User disconnected: ${socket.id}`));
 });
+
+const calculateLongestRoad = (playerId) => {
+  const playerEdges = gameState.edges.filter(e => e.occupant === playerId);
+  if (playerEdges.length === 0) return 0;
+
+  const findLongestPathFromNode = (nodeId, visitedEdges) => {
+    const node = gameState.nodes.find(n => n.id === nodeId);
+    // Road connection is broken if node is occupied by another player
+    if (node && node.occupant && node.occupant !== playerId) return 0;
+
+    let maxBranch = 0;
+    const adjEdges = playerEdges.filter(e => 
+      (e.v1 === nodeId || e.v2 === nodeId) && !visitedEdges.has(e.id)
+    );
+
+    for (const edge of adjEdges) {
+      visitedEdges.add(edge.id);
+      const nextNode = (edge.v1 === nodeId) ? edge.v2 : edge.v1;
+      maxBranch = Math.max(maxBranch, 1 + findLongestPathFromNode(nextNode, visitedEdges));
+      visitedEdges.delete(edge.id);
+    }
+    return maxBranch;
+  };
+
+  let maxLen = 0;
+  const nodesWithRoads = new Set();
+  playerEdges.forEach(e => { nodesWithRoads.add(e.v1); nodesWithRoads.add(e.v2); });
+
+  nodesWithRoads.forEach(nodeId => {
+    maxLen = Math.max(maxLen, findLongestPathFromNode(nodeId, new Set()));
+  });
+
+  return maxLen;
+};
 
 const evaluateSpecialConditions = () => {
   // Largest Army (min 3 knights)
@@ -436,17 +472,46 @@ const evaluateSpecialConditions = () => {
       gameState.largestArmyPlayer = p.id;
     }
   });
-if (gameState.largestArmyPlayer !== currentLeader) {
-  gameState.players.forEach(p => {
-    if (p.id === currentLeader) p.vp -= 2;
-    if (p.id === gameState.largestArmyPlayer) p.vp += 2;
-  });
-  checkWinner();
-}
 
-// Longest Road (min 5 roads) - Simplified for now
-...
-// In a real implementation, we'd need a path-finding algorithm
+  if (gameState.largestArmyPlayer !== currentLeader) {
+    gameState.players.forEach(p => {
+      if (p.id === currentLeader) p.vp -= 2;
+      if (p.id === gameState.largestArmyPlayer) p.vp += 2;
+    });
+    checkWinner();
+  }
+
+  // Longest Road (min 5 roads)
+  let longestRoadLen = 4; // Threshold to get the award is 5
+  let currentRoadLeader = gameState.longestRoadPlayer;
+  
+  // Calculate each player's longest road and update their stats
+  gameState.players.forEach(p => {
+    p.longestRoad = calculateLongestRoad(p.id);
+  });
+
+  if (currentRoadLeader) {
+    const leader = gameState.players.find(p => p.id === currentRoadLeader);
+    longestRoadLen = leader.longestRoad;
+  }
+
+  let newRoadLeader = currentRoadLeader;
+  gameState.players.forEach(p => {
+    // Standard Catan rule: must strictly exceed current leader to take award
+    if (p.longestRoad > longestRoadLen) {
+      longestRoadLen = p.longestRoad;
+      newRoadLeader = p.id;
+    }
+  });
+
+  if (newRoadLeader !== currentRoadLeader) {
+    gameState.players.forEach(p => {
+      if (p.id === currentRoadLeader) p.vp -= 2;
+      if (p.id === newRoadLeader) p.vp += 2;
+    });
+    gameState.longestRoadPlayer = newRoadLeader;
+    checkWinner();
+  }
 };
 
 app.get('*path', (req, res) => res.sendFile(path.join(__dirname, '../client/dist/index.html')));
