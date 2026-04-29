@@ -630,6 +630,28 @@ function App() {
       </div>
 
       <div className="main-content">
+        {player && (
+          <div className="floating-opponents">
+            <h4>Opponents</h4>
+            <div className="opponents-list">
+              {gameState.players.filter(p => p.id !== playerId).map(opp => (
+                <div key={opp.id} className="opponent-info" style={{ borderColor: opp.color }}>
+                  <div className="opponent-header">
+                    <span style={{ fontWeight: 'bold', color: opp.color }}>{opp.name}</span>
+                    <span>VP: {opp.vp - opp.vpCardCount}</span>
+                  </div>
+                  <div className="opponent-stats">
+                    <span>Dev Cards: {opp.devCards.length}</span>
+                    <span>Knights: {opp.knightsPlayed}</span>
+                    <span>Road: {opp.longestRoad}</span>
+                  </div>
+                </div>
+              ))}
+              {gameState.players.length === 1 && <p style={{ fontSize: '0.9rem', color: '#666' }}>No opponents yet.</p>}
+            </div>
+          </div>
+        )}
+
         <h1>Settlers of Catan</h1>
 
         {gameState.phase === 'INITIAL_SETUP' && (
@@ -860,7 +882,7 @@ function App() {
           </div>
         )}
 
-        {gameState.tradeProposal && !isTradeProposer && (
+        {gameState.tradeProposal && !isTradeProposer && !gameState.tradeProposal.declined?.includes(playerId) && (
           <div className="overlay">
             <div className="overlay-content" style={{ minWidth: '450px' }}>
               <h3>Trade Offer from {gameState.players.find(p => p.id === gameState.tradeProposal.proposerId).name}</h3>

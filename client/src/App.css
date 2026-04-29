@@ -43,6 +43,57 @@
   letter-spacing: 1px;
 }
 
+.floating-opponents {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: var(--card-bg);
+  padding: 15px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--border-color);
+  width: 250px;
+  z-index: 50;
+  text-align: left;
+}
+
+.floating-opponents h4 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  color: var(--secondary-color);
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  letter-spacing: 1px;
+}
+
+.opponents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.opponent-info {
+  background: #fcfbf9;
+  border: 1px solid var(--border-color);
+  border-left-width: 5px;
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font-size: 0.9rem;
+}
+
+.opponent-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.opponent-stats {
+  display: flex;
+  gap: 10px;
+  color: #555;
+  font-size: 0.8rem;
+}
+
 .resource-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

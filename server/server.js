@@ -482,7 +482,8 @@ io.on('connection', (socket) => {
       proposerId: socket.id,
       offer,
       request,
-      responses: []
+      responses: [],
+      declined: []
     };
     io.emit('gameStateUpdate', gameState);
   });
@@ -500,8 +501,15 @@ io.on('connection', (socket) => {
       if (!gameState.tradeProposal.responses.includes(socket.id)) {
         gameState.tradeProposal.responses.push(socket.id);
       }
+      if (gameState.tradeProposal.declined) {
+        gameState.tradeProposal.declined = gameState.tradeProposal.declined.filter(id => id !== socket.id);
+      }
     } else {
       gameState.tradeProposal.responses = gameState.tradeProposal.responses.filter(id => id !== socket.id);
+      if (!gameState.tradeProposal.declined) gameState.tradeProposal.declined = [];
+      if (!gameState.tradeProposal.declined.includes(socket.id)) {
+        gameState.tradeProposal.declined.push(socket.id);
+      }
     }
     io.emit('gameStateUpdate', gameState);
   });
