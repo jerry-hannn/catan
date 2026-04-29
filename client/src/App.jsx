@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { GiWoodPile, GiBrickWall, GiSheep, GiWheat, GiOre, GiSwordsEmblem, GiTrophy, GiCardPlay } from 'react-icons/gi';
 import Board from './Board';
@@ -10,6 +10,145 @@ const socket = io({
   reconnectionAttempts: 5
 });
 
+// DICE COMPONENTS
+const DiceCube = React.forwardRef(({}, ref) => {
+  const renderPips = (n) => {
+    return Array.from({ length: n }).map((_, i) => <div key={i} className="pip"></div>);
+  };
+
+  return (
+    <div ref={ref} className="dice-cube" style={{ transform: 'translate3d(-100px, -100px, 0)' }}>
+      {/* Mapping: Standard Dice layout where opposites sum to 7 */}
+      <div className="face front face-1"><div className="pips face-1">{renderPips(1)}</div></div>
+      <div className="face back face-6"><div className="pips face-6">{renderPips(6)}</div></div>
+      <div className="face top face-2"><div className="pips face-2">{renderPips(2)}</div></div>
+      <div className="face bottom face-5"><div className="pips face-5">{renderPips(5)}</div></div>
+      <div className="face right face-3"><div className="pips face-3">{renderPips(3)}</div></div>
+      <div className="face left face-4"><div className="pips face-4">{renderPips(4)}</div></div>
+    </div>
+  );
+});
+
+const createLCG = (seed) => {
+  let s = Math.floor(seed * 4294967296);
+  return () => {
+    s = (s * 1664525 + 1013904223) % 4294967296;
+    return s / 4294967296;
+  };
+};
+
+const DiceOverlay = ({ physicsSeed, onComplete }) => {
+  const lcg = createLCG(physicsSeed);
+  const mainX = 320;
+  // Use a fixed width/height for physics logic to match server, but scale visually
+  const simWidth = 1920;
+  const simHeight = 1080;
+  
+  const cube1Ref = useRef(null);
+  const cube2Ref = useRef(null);
+  
+  const diceData = useRef([
+    { id: 0, x: 320 + (simWidth-320)/2 - 80, y: simHeight + 100, vx: (lcg() - 0.5) * 40, vy: -40 - lcg() * 20, rx: lcg() * 360, ry: lcg() * 360, rz: lcg() * 360, vrx: lcg() * 20, vry: lcg() * 20, vrz: lcg() * 20 },
+    { id: 1, x: 320 + (simWidth-320)/2 + 80, y: simHeight + 100, vx: (lcg() - 0.5) * 40, vy: -40 - lcg() * 20, rx: lcg() * 360, ry: lcg() * 360, rz: lcg() * 360, vrx: lcg() * 20, vry: lcg() * 20, vrz: lcg() * 20 }
+  ]);
+
+  useEffect(() => {
+    let frame;
+    const startTime = Date.now();
+    const duration = 2000;
+    
+    const update = () => {
+      const now = Date.now();
+      const elapsed = now - startTime;
+      
+      if (elapsed > duration) {
+        setTimeout(onComplete, 1500); // 1.5s pause
+        return;
+      }
+
+      const next = diceData.current.map(d => {
+        let { x, y, vx, vy, rx, ry, rz, vrx, vry, vrz } = d;
+        
+        x += vx;
+        y += vy;
+        vy += 1.2;
+        rx += vrx;
+        ry += vry;
+        rz += vrz;
+        vx *= 0.99;
+        vy *= 0.99;
+
+        // Alignment Torque (settling logic)
+        if (y > simHeight - 120 && Math.abs(vy) < 5) {
+          const getTorque = (angle) => {
+            const target = Math.round(angle / 90) * 90;
+            return (target - angle) * 0.1;
+          };
+          vrx += getTorque(rx);
+          vry += getTorque(ry);
+          vrz += getTorque(rz);
+          vrx *= 0.94;
+          vry *= 0.94;
+          vrz *= 0.94;
+        } else {
+          vrx *= 0.98;
+          vry *= 0.98;
+          vrz *= 0.98;
+        }
+
+        if (x < mainX + 50 || x > simWidth - 50) vx *= -0.7;
+        if (y < 50) vy *= -0.7;
+        if (y > simHeight - 100) {
+          y = simHeight - 100;
+          vy *= -0.6;
+          vx *= 0.8;
+        }
+        return { ...d, x, y, vx, vy, rx, ry, rz, vrx, vry, vrz };
+      });
+
+      // Collision
+      const dx = next[0].x - next[1].x;
+      const dy = next[0].y - next[1].y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < 100) {
+        const tempVx = next[0].vx;
+        const tempVy = next[0].vy;
+        next[0].vx = next[1].vx * 0.8;
+        next[0].vy = next[1].vy * 0.8;
+        next[1].vx = tempVx * 0.8;
+        next[1].vy = tempVy * 0.8;
+        const overlap = 100 - dist;
+        next[0].x += (dx / dist) * overlap / 2;
+        next[0].y += (dy / dist) * overlap / 2;
+        next[1].x -= (dx / dist) * overlap / 2;
+        next[1].y -= (dy / dist) * overlap / 2;
+      }
+
+      diceData.current = next;
+
+      const scaleX = window.innerWidth / simWidth;
+      const scaleY = window.innerHeight / simHeight;
+
+      if (cube1Ref.current) cube1Ref.current.style.transform = `translate3d(${next[0].x * scaleX}px, ${next[0].y * scaleY}px, 0) rotateX(${next[0].rx}deg) rotateY(${next[0].ry}deg) rotateZ(${next[0].rz}deg)`;
+      if (cube2Ref.current) cube2Ref.current.style.transform = `translate3d(${next[1].x * scaleX}px, ${next[1].y * scaleY}px, 0) rotateX(${next[1].rx}deg) rotateY(${next[1].ry}deg) rotateZ(${next[1].rz}deg)`;
+
+      frame = requestAnimationFrame(update);
+    };
+
+    frame = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  return (
+    <div className="dice-overlay">
+      <div className="dice-container">
+        <DiceCube ref={cube1Ref} />
+        <DiceCube ref={cube2Ref} />
+      </div>
+    </div>
+  );
+};
+
 function App() {
   const [gameState, setGameState] = useState(null);
   const [playerId, setPlayerId] = useState(null);
@@ -19,6 +158,11 @@ function App() {
   const [pendingSettlement, setPendingSettlement] = useState(null);
   const [pendingRoad, setPendingRoad] = useState(null);
   const [activeModal, setActiveModal] = useState(null); // 'build', 'trade', 'devCards'
+  const [rollingDice, setRollingDice] = useState(null); // { d1, d2, roll }
+  const [drawnCard, setDrawnCard] = useState(null); // { type, id }
+  const [isCardFlipped, setIsCardFlipped] = useState(false);
+  const [lastAnimationResult, setLastAnimationResult] = useState(null);
+  const isAnimatingDice = useRef(false);
 
   const [playerName, setPlayerName] = useState('');
   const [playerColor, setPlayerColor] = useState('#e63946');
@@ -47,6 +191,21 @@ function App() {
       setGameState(state);
       setPendingSettlement(null);
       setPendingRoad(null);
+      // Only sync if not currently animating a roll
+      if (!isAnimatingDice.current) {
+        setLastAnimationResult(state.lastRoll);
+      }
+    });
+
+    socket.on('dice_rolled_start', (data) => {
+      isAnimatingDice.current = true;
+      setRollingDice(data);
+      setLastAnimationResult(null); // Clear sidebar while rolling
+    });
+
+    socket.on('dev_card_drawn', (card) => {
+      setDrawnCard(card);
+      setIsCardFlipped(false);
     });
 
     socket.on('error', (msg) => {
@@ -402,10 +561,10 @@ function App() {
                       <button className="action-btn" onClick={handleRollDice}>Roll Dice</button>
                     ) : (
                       <>
-                        <button className="action-btn" onClick={() => setActiveModal('build')}>Build...</button>
-                        <button className="action-btn" onClick={() => setActiveModal('trade')}>Trade...</button>
-                        <button className="action-btn" onClick={() => setActiveModal('devCards')}>Dev Cards ({player.devCards.length})</button>
-                        <button className="action-btn" onClick={handleEndTurn} disabled={gameState.mustMoveRobber}>End Turn</button>
+                        <button className="action-btn" onClick={() => setActiveModal('build')} disabled={rollingDice}>Build...</button>
+                        <button className="action-btn" onClick={() => setActiveModal('trade')} disabled={rollingDice}>Trade...</button>
+                        <button className="action-btn" onClick={() => setActiveModal('devCards')} disabled={rollingDice}>Dev Cards ({player.devCards.length})</button>
+                        <button className="action-btn" onClick={handleEndTurn} disabled={gameState.mustMoveRobber || rollingDice}>End Turn</button>
                       </>
                     )}
                   </>
@@ -417,8 +576,8 @@ function App() {
             <div className="sidebar-dice">
               <h4>Last Roll</h4>
               <div className="dice-result">
-                {gameState.lastRoll ? (
-                  <h3>{gameState.lastRoll.roll} ({gameState.lastRoll.d1}+{gameState.lastRoll.d2})</h3>
+                {lastAnimationResult ? (
+                  <h3>{lastAnimationResult.roll} ({lastAnimationResult.d1}+{lastAnimationResult.d2})</h3>
                 ) : (
                   <h3>-</h3>
                 )}
@@ -648,7 +807,7 @@ function App() {
           </div>
         )}
 
-        {robberTargetHex && (
+        {!rollingDice && robberTargetHex && (
           <div className="overlay">
             <div className="overlay-content">
               <h3>Rob a player:</h3>
@@ -684,6 +843,42 @@ function App() {
                   {gameState.tradeProposal.responses.includes(playerId) ? "Accepted" : "Accept Trade"}
                 </button>
                 <button className="purchase-btn" onClick={() => handleRespondToTrade(false)}>Decline</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {rollingDice && (
+          <DiceOverlay 
+            physicsSeed={rollingDice.physicsSeed} 
+            onComplete={() => {
+              isAnimatingDice.current = false;
+              setLastAnimationResult(rollingDice.result);
+              setRollingDice(null);
+            }} 
+          />
+        )}
+
+        {drawnCard && (
+          <div className="card-reveal-overlay">
+            <div className={`flip-card ${isCardFlipped ? 'flipped' : ''}`} onClick={() => setIsCardFlipped(true)}>
+              <div className="flip-card-inner">
+                <div className="flip-card-front">
+                  <GiCardPlay size={100} />
+                  <h3>New Development Card</h3>
+                  <p>Click to Reveal</p>
+                </div>
+                <div className="flip-card-back">
+                  <div className="reveal-icon">
+                    {drawnCard.type === 'Knight' && <GiSwordsEmblem />}
+                    {drawnCard.type === 'Victory Point' && <GiTrophy />}
+                    {drawnCard.type !== 'Knight' && drawnCard.type !== 'Victory Point' && <GiCardPlay />}
+                  </div>
+                  <h2>{drawnCard.type}</h2>
+                  {isCardFlipped && (
+                    <button className="action-btn" style={{ marginTop: '30px' }} onClick={(e) => { e.stopPropagation(); setDrawnCard(null); setIsCardFlipped(false); }}>Got it!</button>
+                  )}
+                </div>
               </div>
             </div>
           </div>

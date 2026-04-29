@@ -63,6 +63,153 @@ const checkWinner = () => {
   }
 };
 
+const createLCG = (seed) => {
+  let s = Math.floor(seed * 4294967296);
+  return () => {
+    s = (s * 1664525 + 1013904223) % 4294967296;
+    return s / 4294967296;
+  };
+};
+
+const runDicePhysics = (seed, width, height) => {
+  const lcg = createLCG(seed);
+  const mainX = 320;
+  const mainWidth = width - 320;
+  
+  let dice = [
+    { x: mainX + mainWidth/2 - 80, y: height + 100, vx: (lcg() - 0.5) * 40, vy: -40 - lcg() * 20, rx: lcg() * 360, ry: lcg() * 360, rz: lcg() * 360, vrx: lcg() * 20, vry: lcg() * 20, vrz: lcg() * 20 },
+    { x: mainX + mainWidth/2 + 80, y: height + 100, vx: (lcg() - 0.5) * 40, vy: -40 - lcg() * 20, rx: lcg() * 360, ry: lcg() * 360, rz: lcg() * 360, vrx: lcg() * 20, vry: lcg() * 20, vrz: lcg() * 20 }
+  ];
+
+  const duration = 2000;
+  const dt = 16.67; 
+  const steps = Math.floor(duration / dt);
+
+  for (let i = 0; i < steps; i++) {
+    dice = dice.map(d => {
+      let { x, y, vx, vy, rx, ry, rz, vrx, vry, vrz } = d;
+      
+      // Basic Physics
+      x += vx;
+      y += vy;
+      vy += 1.2; // Gravity
+      rx += vrx;
+      ry += vry;
+      rz += vrz;
+
+      // Friction
+      vx *= 0.99;
+      vy *= 0.99;
+      
+      // Alignment Torque (settling logic)
+      // When near ground and slow, pull toward nearest 90deg
+      if (y > height - 120 && Math.abs(vy) < 5) {
+        const getTorque = (angle) => {
+          const target = Math.round(angle / 90) * 90;
+          return (target - angle) * 0.1;
+        };
+        vrx += getTorque(rx);
+        vry += getTorque(ry);
+        vrz += getTorque(rz);
+        // Higher friction during settling
+        vrx *= 0.94;
+        vry *= 0.94;
+        vrz *= 0.94;
+      } else {
+        vrx *= 0.98;
+        vry *= 0.98;
+        vrz *= 0.98;
+      }
+
+      // Bounds
+      if (x < mainX + 50 || x > width - 50) vx *= -0.7;
+      if (y < 50) vy *= -0.7;
+      if (y > height - 100) {
+        y = height - 100;
+        vy *= -0.6;
+        vx *= 0.8;
+      }
+      return { ...d, x, y, vx, vy, rx, ry, rz, vrx, vry, vrz };
+    });
+
+    // Collision
+    const dx = dice[0].x - dice[1].x;
+    const dy = dice[0].y - dice[1].y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist < 100) {
+      const tempVx = dice[0].vx;
+      const tempVy = dice[0].vy;
+      dice[0].vx = dice[1].vx * 0.8;
+      dice[0].vy = dice[1].vy * 0.8;
+      dice[1].vx = tempVx * 0.8;
+      dice[1].vy = tempVy * 0.8;
+      const overlap = 100 - dist;
+      dice[0].x += (dx / dist) * overlap / 2;
+      dice[0].y += (dy / dist) * overlap / 2;
+      dice[1].x -= (dx / dist) * overlap / 2;
+      dice[1].y -= (dy / dist) * overlap / 2;
+    }
+  }
+
+  const rotateVector = (v, rx, ry, rz) => {
+    const radX = rx * Math.PI / 180;
+    const radY = ry * Math.PI / 180;
+    const radZ = rz * Math.PI / 180;
+
+    let { x, y, z } = { x: v[0], y: v[1], z: v[2] };
+
+    // CSS applies transform: rotateX rotateY rotateZ in reverse order to the point (Z, then Y, then X)
+    
+    // 1. Rotate Z
+    let nx = x * Math.cos(radZ) - y * Math.sin(radZ);
+    let ny = x * Math.sin(radZ) + y * Math.cos(radZ);
+    x = nx; y = ny;
+
+    // 2. Rotate Y
+    nx = x * Math.cos(radY) + z * Math.sin(radY);
+    let nz = -x * Math.sin(radY) + z * Math.cos(radY);
+    x = nx; z = nz;
+
+    // 3. Rotate X
+    ny = y * Math.cos(radX) - z * Math.sin(radX);
+    nz = y * Math.sin(radX) + z * Math.cos(radX);
+    y = ny; z = nz;
+
+    return [x, y, z];
+  };
+
+  const getFace = (rx, ry, rz) => {
+    // 6 local face vectors matching CSS 3D coordinate system (Y is DOWN)
+    const faces = [
+      { id: 1, v: [0, 0, 1] },   // Front (+Z)
+      { id: 6, v: [0, 0, -1] },  // Back (-Z)
+      { id: 2, v: [0, -1, 0] },  // Top (-Y)
+      { id: 5, v: [0, 1, 0] },   // Bottom (+Y)
+      { id: 3, v: [1, 0, 0] },   // Right (+X)
+      { id: 4, v: [-1, 0, 0] }   // Left (-X)
+    ];
+
+    let maxZ = -Infinity;
+    let bestFace = 1;
+
+    faces.forEach(f => {
+      const rotated = rotateVector(f.v, rx, ry, rz);
+      // The face pointing most directly at the user (+Z in camera space) is the visible one
+      if (rotated[2] > maxZ) {
+        maxZ = rotated[2];
+        bestFace = f.id;
+      }
+    });
+
+    return bestFace;
+  };
+
+  const d1 = getFace(dice[0].rx, dice[0].ry, dice[0].rz);
+  const d2 = getFace(dice[1].rx, dice[1].ry, dice[1].rz);
+  
+  return { d1, d2, dice };
+};
+
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
   socket.emit('gameStateUpdate', gameState);
@@ -213,12 +360,17 @@ io.on('connection', (socket) => {
 
   socket.on('roll_dice', () => {
     if (gameState.phase !== 'MAIN' || gameState.hasRolled || socket.id !== gameState.turnOrder[gameState.currentTurnIndex]) return;
-    const d1 = Math.floor(Math.random() * 6) + 1;
-    const d2 = Math.floor(Math.random() * 6) + 1;
+    
+    const physicsSeed = Math.random();
+    // Deterministic simulation (assume 1920x1080 viewport for headless consistency)
+    const { d1, d2 } = runDicePhysics(physicsSeed, 1920, 1080);
     const roll = d1 + d2;
+    
     gameState.hasRolled = true;
     gameState.lastRoll = { d1, d2, roll };
-    io.emit('dice_rolled', { d1, d2, roll });
+    
+    // Broadcast the seed so clients can run the same animation
+    io.emit('dice_rolled_start', { physicsSeed, result: { d1, d2, roll } });
 
     if (roll === 7) {
       gameState.players.forEach(player => {
