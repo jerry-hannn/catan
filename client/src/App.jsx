@@ -149,6 +149,14 @@ const DiceOverlay = ({ physicsSeed, onComplete }) => {
   );
 };
 
+const AVAILABLE_COLORS = [
+  { name: 'Red', hex: '#e63946' },
+  { name: 'Blue', hex: '#457b9d' },
+  { name: 'Orange', hex: '#f4a261' },
+  { name: 'Green', hex: '#2a9d8f' },
+  { name: 'Purple', hex: '#8338ec' }
+];
+
 function App() {
   const [gameState, setGameState] = useState(null);
   const [playerId, setPlayerId] = useState(null);
@@ -163,9 +171,10 @@ function App() {
   const [isCardFlipped, setIsCardFlipped] = useState(false);
   const [lastAnimationResult, setLastAnimationResult] = useState(null);
   const isAnimatingDice = useRef(false);
+  const bufferedGameState = useRef(null);
 
   const [playerName, setPlayerName] = useState('');
-  const [playerColor, setPlayerColor] = useState('#e63946');
+  const [playerColor, setPlayerColor] = useState(AVAILABLE_COLORS[0].hex);
   const [tradeType, setTradeType] = useState('bank'); // 'bank' or 'player'
   const [tradeOffer, setTradeOffer] = useState('Wood'); // bank offer
   const [tradeRequest, setTradeRequest] = useState('Brick'); // bank request
@@ -178,6 +187,16 @@ function App() {
   const [devCardAction, setDevCardAction] = useState(null); // { type, cardId, selection: [] }
 
   useEffect(() => {
+    if (gameState && gameState.phase === 'LOBBY') {
+      const takenColors = gameState.players.map(p => p.color);
+      if (takenColors.includes(playerColor)) {
+        const nextAvailable = AVAILABLE_COLORS.find(c => !takenColors.includes(c.hex));
+        if (nextAvailable) setPlayerColor(nextAvailable.hex);
+      }
+    }
+  }, [gameState, playerColor]);
+
+  useEffect(() => {
     socket.on('connect', () => {
       setPlayerId(socket.id);
       setConnectionStatus('connected');
@@ -188,13 +207,17 @@ function App() {
     });
 
     socket.on('gameStateUpdate', (state) => {
+      // If we are currently animating a roll, buffer the new state
+      // to hide consequences (resources, robber status, etc) until dice settle
+      if (isAnimatingDice.current) {
+        bufferedGameState.current = state;
+        return;
+      }
+
       setGameState(state);
       setPendingSettlement(null);
       setPendingRoad(null);
-      // Only sync if not currently animating a roll
-      if (!isAnimatingDice.current) {
-        setLastAnimationResult(state.lastRoll);
-      }
+      setLastAnimationResult(state.lastRoll);
     });
 
     socket.on('dice_rolled_start', (data) => {
@@ -421,7 +444,26 @@ function App() {
             <input type="text" placeholder="Your Name" value={playerName} onChange={e => setPlayerName(e.target.value)} required />
             <div className="color-picker-container">
               <span>Pick a color:</span>
-              <input type="color" value={playerColor} onChange={e => setPlayerColor(e.target.value)} title="Choose your color" />
+              <div className="color-swatches">
+                {AVAILABLE_COLORS.map(c => {
+                  const isTaken = gameState?.players.some(p => p.color === c.hex);
+                  return (
+                    <button
+                      key={c.hex}
+                      type="button"
+                      className={`color-swatch ${playerColor === c.hex ? 'selected' : ''}`}
+                      style={{ 
+                        backgroundColor: c.hex, 
+                        opacity: isTaken ? 0.3 : 1, 
+                        cursor: isTaken ? 'not-allowed' : 'pointer' 
+                      }}
+                      disabled={isTaken}
+                      onClick={() => setPlayerColor(c.hex)}
+                      title={isTaken ? 'Color taken' : c.name}
+                    />
+                  );
+                })}
+              </div>
             </div>
             <button type="submit">Join Game</button>
           </form>
@@ -618,7 +660,7 @@ function App() {
           </div>
         )}
 
-        {isMyTurn && gameState.mustMoveRobber && (
+        {!rollingDice && isMyTurn && gameState.mustMoveRobber && (
           <p className="build-prompt" style={{ fontSize: '1.5rem' }}>You must move the robber! Click a hex on the board.</p>
         )}
 
@@ -786,7 +828,7 @@ function App() {
           </div>
         )}
 
-        {gameState.discardingPlayers?.find(dp => dp.id === playerId) && (
+        {!rollingDice && gameState.discardingPlayers?.find(dp => dp.id === playerId) && (
           <div className="overlay">
             <div className="overlay-content">
               <h3>Discard {gameState.discardingPlayers.find(dp => dp.id === playerId).count} Cards</h3>
@@ -853,7 +895,13 @@ function App() {
             physicsSeed={rollingDice.physicsSeed} 
             onComplete={() => {
               isAnimatingDice.current = false;
-              setLastAnimationResult(rollingDice.result);
+              if (bufferedGameState.current) {
+                setGameState(bufferedGameState.current);
+                setLastAnimationResult(bufferedGameState.current.lastRoll);
+                bufferedGameState.current = null;
+              } else {
+                setLastAnimationResult(rollingDice.result);
+              }
               setRollingDice(null);
             }} 
           />

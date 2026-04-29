@@ -25,7 +25,7 @@ const io = new Server(server, {
   }
 });
 
-const ObjectColors = ['#e63946', '#457b9d', '#f4a261', '#2a9d8f', '#8338ec', '#ffb703'];
+const ObjectColors = ['#e63946', '#457b9d', '#f4a261', '#2a9d8f', '#8338ec'];
 
 const createInitialGameState = () => {
   const board = generateBoard();
@@ -219,7 +219,11 @@ io.on('connection', (socket) => {
     if (gameState.players.length >= 4) return socket.emit('error', 'Game full');
 
     if (!gameState.players.find(p => p.id === socket.id)) {
-      const assignedColor = color || ObjectColors[gameState.players.length % ObjectColors.length];
+      const takenColors = gameState.players.map(p => p.color);
+      let assignedColor = color;
+      if (takenColors.includes(assignedColor) || !ObjectColors.includes(assignedColor)) {
+        assignedColor = ObjectColors.find(c => !takenColors.includes(c));
+      }
       gameState.players.push({
         id: socket.id,
         name: name || `Player ${gameState.players.length + 1}`,

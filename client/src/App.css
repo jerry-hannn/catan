@@ -5,7 +5,7 @@
   width: 100vw;
   height: 100vh;
   overflow: hidden;
-  background-color: #f0f2f5;
+  background-color: transparent;
 }
 
 /* SIDEBAR STYLES */
@@ -266,19 +266,34 @@
 .color-picker-container {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 15px;
   width: 100%;
   justify-content: center;
 }
 
-.lobby-form input[type="color"] {
-  width: 60px;
-  height: 45px;
-  padding: 2px;
-  border: 2px solid var(--border-color);
-  border-radius: var(--radius);
-  cursor: pointer;
-  background: #fff;
+.color-swatches {
+  display: flex;
+  gap: 10px;
+}
+
+.color-swatch {
+  width: 35px;
+  height: 35px;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  padding: 0;
+  transition: transform 0.2s, border-color 0.2s, opacity 0.2s;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+.color-swatch.selected {
+  border-color: #333;
+  transform: scale(1.15);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+
+.color-swatch:hover:not(:disabled) {
+  transform: scale(1.1);
 }
 
 .lobby-form button, .lobby-waiting button {
