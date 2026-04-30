@@ -50,11 +50,24 @@ const createInitialGameState = () => {
     longestRoadPlayer: null,
     largestArmyPlayer: null,
     hasPlayedDevCard: false,
-    freeRoadsCount: 0
+    freeRoadsCount: 0,
+    log: []
   };
 };
 
 let gameState = createInitialGameState();
+
+const addToLog = (message, color = '#666') => {
+  gameState.log.unshift({
+    id: Math.random().toString(36).substr(2, 9),
+    message,
+    color,
+    timestamp: Date.now()
+  });
+  if (gameState.log.length > 50) {
+    gameState.log = gameState.log.slice(0, 50);
+  }
+};
 
 const checkWinner = () => {
   const winner = gameState.players.find(p => p.vp >= 10);
@@ -238,6 +251,7 @@ io.on('connection', (socket) => {
         knightsPlayed: 0
       });
       gameState.turnOrder.push(socket.id);
+      addToLog(`${name || `Player ${gameState.players.length}`} joined the lobby.`, assignedColor);
       io.emit('gameStateUpdate', gameState);
     }
   });
@@ -252,6 +266,7 @@ io.on('connection', (socket) => {
     gameState.currentTurnIndex = 0;
     gameState.setupState = { settlementPlaced: false, roadPlaced: false, lastSettlementNodeId: null };
     
+    addToLog('The game has started!');
     io.emit('gameStateUpdate', gameState);
   });
 
@@ -285,6 +300,7 @@ io.on('connection', (socket) => {
     node.buildingType = 'Settlement';
     p.vp += 1;
     p.settlementCount += 1;
+    addToLog(`${p.name} built a settlement.`, p.color);
     checkWinner();
 
     if (gameState.phase === 'INITIAL_SETUP') {
@@ -325,12 +341,13 @@ io.on('connection', (socket) => {
         return socket.emit('error', 'Must connect to the settlement just placed');
       }
     } else {
-      const connected = gameState.nodes.some(n => (n.id === edge.v1 || n.id === edge.v2) && n.occupant === activePlayerId) ||
+      const connected = gameState.nodes.some(n => (n.id === edge.v1 || n.id === edge.v1 || n.id === edge.v2 || n.id === edge.v2) && n.occupant === activePlayerId) ||
                         gameState.edges.some(e => (e.v1 === edge.v1 || e.v2 === edge.v1 || e.v1 === edge.v2 || e.v2 === edge.v2) && e.occupant === activePlayerId);
       if (!connected) return socket.emit('error', 'Must connect to your network');
     }
 
     edge.occupant = activePlayerId;
+    addToLog(`${p.name} built a road.`, p.color);
     if (gameState.phase === 'INITIAL_SETUP') {
       gameState.setupState.roadPlaced = true;
       gameState.currentTurnIndex++;
@@ -357,6 +374,7 @@ io.on('connection', (socket) => {
     p.vp += 1;
     p.cityCount += 1;
     p.settlementCount -= 1;
+    addToLog(`${p.name} upgraded a settlement to a city.`, p.color);
     checkWinner();
     p.resources.Wheat -= 2; p.resources.Ore -= 3;
     io.emit('gameStateUpdate', gameState);
@@ -372,6 +390,8 @@ io.on('connection', (socket) => {
     
     gameState.hasRolled = true;
     gameState.lastRoll = { d1, d2, roll };
+    const p = gameState.players.find(p => p.id === socket.id);
+    addToLog(`${p.name} rolled a ${roll} (${d1}+${d2}).`, p.color);
     
     // Broadcast the seed so clients can run the same animation
     io.emit('dice_rolled_start', { physicsSeed, result: { d1, d2, roll } });
@@ -414,6 +434,12 @@ io.on('connection', (socket) => {
       player.resources[res] -= resourcesToDiscard[res];
     }
 
+    const resList = Object.entries(resourcesToDiscard)
+      .filter(([_, count]) => count > 0)
+      .map(([res, count]) => `${count} ${res}`)
+      .join(', ');
+    addToLog(`${player.name} discarded ${requiredCount} resources: ${resList}.`, player.color);
+
     // Remove from discarding list
     gameState.discardingPlayers.splice(playerIndex, 1);
 
@@ -431,14 +457,20 @@ io.on('connection', (socket) => {
     if (!hex || hex.resource === 'Ocean' || hexId === gameState.robberHexId) return;
     gameState.robberHexId = hexId;
     gameState.mustMoveRobber = false;
+    const p = gameState.players.find(p => p.id === socket.id);
     if (victimId) {
       const victim = gameState.players.find(p => p.id === victimId);
       const res = Object.keys(victim.resources).filter(k => victim.resources[k] > 0);
       if (res.length > 0) {
         const stolen = res[Math.floor(Math.random() * res.length)];
         victim.resources[stolen]--;
-        gameState.players.find(p => p.id === socket.id).resources[stolen]++;
+        p.resources[stolen]++;
+        addToLog(`${p.name} moved the robber and robbed ${victim.name}.`, p.color);
+      } else {
+        addToLog(`${p.name} moved the robber but ${victim.name} had no resources.`, p.color);
       }
+    } else {
+      addToLog(`${p.name} moved the robber.`, p.color);
     }
     io.emit('gameStateUpdate', gameState);
   });
@@ -464,6 +496,7 @@ io.on('connection', (socket) => {
 
     p.resources[offerResource] -= tradeRate;
     p.resources[requestResource] += 1;
+    addToLog(`${p.name} traded ${tradeRate} ${offerResource} for 1 ${requestResource} with the bank.`, p.color);
     
     io.emit('gameStateUpdate', gameState);
   });
@@ -482,7 +515,8 @@ io.on('connection', (socket) => {
       proposerId: socket.id,
       offer,
       request,
-      responses: []
+      responses: [],
+      declined: []
     };
     io.emit('gameStateUpdate', gameState);
   });
@@ -500,8 +534,15 @@ io.on('connection', (socket) => {
       if (!gameState.tradeProposal.responses.includes(socket.id)) {
         gameState.tradeProposal.responses.push(socket.id);
       }
+      if (gameState.tradeProposal.declined) {
+        gameState.tradeProposal.declined = gameState.tradeProposal.declined.filter(id => id !== socket.id);
+      }
     } else {
       gameState.tradeProposal.responses = gameState.tradeProposal.responses.filter(id => id !== socket.id);
+      if (!gameState.tradeProposal.declined) gameState.tradeProposal.declined = [];
+      if (!gameState.tradeProposal.declined.includes(socket.id)) {
+        gameState.tradeProposal.declined.push(socket.id);
+      }
     }
     io.emit('gameStateUpdate', gameState);
   });
@@ -528,6 +569,10 @@ io.on('connection', (socket) => {
       proposer.resources[res] += request[res];
     }
 
+    const offerList = Object.entries(offer).filter(([_, c]) => c > 0).map(([r, c]) => `${c} ${r}`).join(', ');
+    const requestList = Object.entries(request).filter(([_, c]) => c > 0).map(([r, c]) => `${c} ${r}`).join(', ');
+    addToLog(`${proposer.name} and ${responder.name} completed a trade: ${proposer.name} gave ${offerList}, ${responder.name} gave ${requestList}.`, '#386044');
+
     gameState.tradeProposal = null;
     io.emit('gameStateUpdate', gameState);
   });
@@ -551,6 +596,7 @@ io.on('connection', (socket) => {
       p.vpCardCount++;
       checkWinner();
     }
+    addToLog(`${p.name} bought a development card.`, p.color);
     socket.emit('dev_card_drawn', card);
     io.emit('gameStateUpdate', gameState);
   });
@@ -563,6 +609,7 @@ io.on('connection', (socket) => {
     p.knightsPlayed++;
     gameState.hasPlayedDevCard = true;
     gameState.mustMoveRobber = true;
+    addToLog(`${p.name} played a Knight card.`, p.color);
     evaluateSpecialConditions();
     io.emit('gameStateUpdate', gameState);
   });
@@ -578,6 +625,7 @@ io.on('connection', (socket) => {
     });
     p.devCards.splice(idx, 1);
     gameState.hasPlayedDevCard = true;
+    addToLog(`${p.name} played a Year of Plenty card.`, p.color);
     io.emit('gameStateUpdate', gameState);
   });
 
@@ -597,6 +645,7 @@ io.on('connection', (socket) => {
     p.resources[resource] += total;
     p.devCards.splice(idx, 1);
     gameState.hasPlayedDevCard = true;
+    addToLog(`${p.name} played a Monopoly card on ${resource}.`, p.color);
     io.emit('gameStateUpdate', gameState);
   });
 
@@ -617,6 +666,7 @@ io.on('connection', (socket) => {
 
     p.devCards.splice(idx, 1);
     gameState.hasPlayedDevCard = true;
+    addToLog(`${p.name} played a Road Building card.`, p.color);
     evaluateSpecialConditions();
     io.emit('gameStateUpdate', gameState);
   });
@@ -704,7 +754,10 @@ const evaluateSpecialConditions = () => {
   if (gameState.largestArmyPlayer !== currentLeader) {
     gameState.players.forEach(p => {
       if (p.id === currentLeader) p.vp -= 2;
-      if (p.id === gameState.largestArmyPlayer) p.vp += 2;
+      if (p.id === gameState.largestArmyPlayer) {
+        p.vp += 2;
+        addToLog(`${p.name} took the Largest Army award!`, p.color);
+      }
     });
     checkWinner();
   }
@@ -735,7 +788,10 @@ const evaluateSpecialConditions = () => {
   if (newRoadLeader !== currentRoadLeader) {
     gameState.players.forEach(p => {
       if (p.id === currentRoadLeader) p.vp -= 2;
-      if (p.id === newRoadLeader) p.vp += 2;
+      if (p.id === newRoadLeader) {
+        p.vp += 2;
+        addToLog(`${p.name} took the Longest Road award!`, p.color);
+      }
     });
     gameState.longestRoadPlayer = newRoadLeader;
     checkWinner();

@@ -157,6 +157,14 @@ const AVAILABLE_COLORS = [
   { name: 'Purple', hex: '#8338ec' }
 ];
 
+const DEV_CARD_DESCRIPTIONS = {
+  'Knight': 'Move the robber. Steal 1 resource card from the owner of an adjacent settlement or city.',
+  'Victory Point': 'Revealed only at the end of the game if they bring you to 10 points.',
+  'Year of Plenty': 'Take any 2 resources from the bank and add them to your hand.',
+  'Monopoly': 'Announce 1 type of resource. All other players must give you all their resource cards of that type.',
+  'Road Building': 'Place 2 new roads on the board (at no cost).'
+};
+
 function App() {
   const [gameState, setGameState] = useState(null);
   const [playerId, setPlayerId] = useState(null);
@@ -172,6 +180,7 @@ function App() {
   const [lastAnimationResult, setLastAnimationResult] = useState(null);
   const isAnimatingDice = useRef(false);
   const bufferedGameState = useRef(null);
+  const logEndRef = useRef(null);
 
   const [playerName, setPlayerName] = useState('');
   const [playerColor, setPlayerColor] = useState(AVAILABLE_COLORS[0].hex);
@@ -242,6 +251,12 @@ function App() {
       socket.off('error');
     };
   }, []);
+
+  useEffect(() => {
+    if (logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [gameState?.log]);
 
   const handleJoin = (e) => {
     e.preventDefault();
@@ -630,6 +645,43 @@ function App() {
       </div>
 
       <div className="main-content">
+        {player && (
+          <div className="floating-opponents">
+            <h4>Opponents</h4>
+            <div className="opponents-list">
+              {gameState.players.filter(p => p.id !== playerId).map(opp => (
+                <div key={opp.id} className="opponent-info" style={{ borderColor: opp.color }}>
+                  <div className="opponent-header">
+                    <span style={{ fontWeight: 'bold', color: opp.color }}>{opp.name}</span>
+                    <span>VP: {opp.vp - opp.vpCardCount}</span>
+                  </div>
+                  <div className="opponent-stats">
+                    <span>Res: {Object.values(opp.resources).reduce((a, b) => a + b, 0)}</span>
+                    <span>Dev: {opp.devCards.length}</span>
+                    <span>K: {opp.knightsPlayed}</span>
+                    <span>R: {opp.longestRoad}</span>
+                  </div>
+                </div>
+              ))}
+              {gameState.players.length === 1 && <p style={{ fontSize: '0.9rem', color: '#666' }}>No opponents yet.</p>}
+            </div>
+          </div>
+        )}
+
+        {player && (
+          <div className="floating-log">
+            <h4>Activity Log</h4>
+            <div className="log-messages">
+              {[...gameState.log].reverse().map((entry) => (
+                <div key={entry.id} className="log-entry" style={{ borderLeftColor: entry.color }}>
+                  {entry.message}
+                </div>
+              ))}
+              <div ref={logEndRef} />
+            </div>
+          </div>
+        )}
+
         <h1>Settlers of Catan</h1>
 
         {gameState.phase === 'INITIAL_SETUP' && (
@@ -799,10 +851,15 @@ function App() {
                     disabled={!card.canPlay || gameState.hasPlayedDevCard || !isMyTurn || !gameState.hasRolled}
                     onClick={() => { handlePlayCard(card); setActiveModal(null); }}
                   >
-                    {card.type === 'Knight' && <GiSwordsEmblem />}
-                    {card.type === 'Victory Point' && <GiTrophy />}
-                    {card.type !== 'Knight' && card.type !== 'Victory Point' && <GiCardPlay />}
-                    <span>{card.type}</span>
+                    <div className="dev-card-icon">
+                      {card.type === 'Knight' && <GiSwordsEmblem />}
+                      {card.type === 'Victory Point' && <GiTrophy />}
+                      {card.type !== 'Knight' && card.type !== 'Victory Point' && <GiCardPlay />}
+                    </div>
+                    <div className="dev-card-info">
+                      <strong>{card.type}</strong>
+                      <p>{DEV_CARD_DESCRIPTIONS[card.type]}</p>
+                    </div>
                   </button>
                 ))}
                 {player.devCards.length === 0 && <p>No cards held</p>}
@@ -860,7 +917,7 @@ function App() {
           </div>
         )}
 
-        {gameState.tradeProposal && !isTradeProposer && (
+        {gameState.tradeProposal && !isTradeProposer && !gameState.tradeProposal.declined?.includes(playerId) && (
           <div className="overlay">
             <div className="overlay-content" style={{ minWidth: '450px' }}>
               <h3>Trade Offer from {gameState.players.find(p => p.id === gameState.tradeProposal.proposerId).name}</h3>
@@ -923,8 +980,9 @@ function App() {
                     {drawnCard.type !== 'Knight' && drawnCard.type !== 'Victory Point' && <GiCardPlay />}
                   </div>
                   <h2>{drawnCard.type}</h2>
+                  <p className="card-description">{DEV_CARD_DESCRIPTIONS[drawnCard.type]}</p>
                   {isCardFlipped && (
-                    <button className="action-btn" style={{ marginTop: '30px' }} onClick={(e) => { e.stopPropagation(); setDrawnCard(null); setIsCardFlipped(false); }}>Got it!</button>
+                    <button className="action-btn" style={{ marginTop: '20px' }} onClick={(e) => { e.stopPropagation(); setDrawnCard(null); setIsCardFlipped(false); }}>Got it!</button>
                   )}
                 </div>
               </div>
