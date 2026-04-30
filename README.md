@@ -1,49 +1,44 @@
 # Hosting Guide for Multiplayer Catan
 
-Follow these steps to host the game on your laptop and allow your friends to connect over the internet using Ngrok.
+This project is now configured as a **unified full-stack application**. The Express server hosts the Socket.io backend and serves the production-ready React frontend from a single port.
 
 ## Prerequisites
 1. You need Node.js and npm installed.
-2. You need an Ngrok account and the `ngrok` CLI tool installed.
+2. You need an Ngrok account and the `ngrok` CLI tool installed (to play over the internet).
 
-## 1. Start the Backend Server
-Open a terminal, navigate to the `server` directory, and start the backend:
+## 1. Build the Frontend
+Before hosting, you must compile the React application into static files that the server can serve.
+```bash
+cd client
+npm run build
+```
+*This creates a `dist` folder that the backend will use.*
+
+## 2. Start the Unified Server
+Navigate to the `server` directory and start the application:
 ```bash
 cd server
 node server.js
 ```
-*The server should now be running on port 3001.*
+*The entire application (Frontend + Backend) is now running on port 3001.*
 
-## 2. Expose the Backend with Ngrok
-Open a **new** terminal window and run ngrok to expose your local port 3001 to the public internet:
+## 3. Expose to the Internet with Ngrok
+Open a **new** terminal window and run ngrok to expose port 3001:
 ```bash
 ngrok http 3001
 ```
-*Ngrok will provide a "Forwarding" URL (e.g., `https://1234-abcd.ngrok-free.app`). Copy this URL.*
-
-## 3. Configure and Start the Frontend Client
-Your friends will need to tell their client where your server is. 
-Open a **third** terminal window, navigate to the `client` directory:
-```bash
-cd client
-```
-
-Create a `.env` file in the `client` directory (or edit the existing one) and set the `VITE_SERVER_URL` to your Ngrok URL:
-```env
-VITE_SERVER_URL=https://1234-abcd.ngrok-free.app
-```
-
-Then start the client:
-```bash
-npm run dev
-```
+*Ngrok will provide a "Forwarding" URL (e.g., `https://a1b2-c3d4.ngrok-free.app`).*
 
 ## 4. How Your Friends Connect
-You have two options for your friends:
-1. **Host the frontend yourself (Recommended):** If you also expose your frontend via Ngrok (`ngrok http 5173`), you can give your friends that URL. They open it in their browser, and their browser will automatically connect to your backend via the `VITE_SERVER_URL` you configured.
-   ```bash
-   ngrok http 5173
-   ```
-   Then give them the new Ngrok URL for port 5173.
-   
-2. **They run the client locally:** Send them the `client` folder. They run `npm install`, create the `.env` file with your backend Ngrok URL, and run `npm run dev`.
+Simply send your friends the **Ngrok Forwarding URL**. 
+1. They open the URL in any web browser.
+2. The frontend will load and automatically connect to your backend via the same host.
+3. No environment variables or local setup is required for players!
+
+---
+
+### Development Mode
+If you are making code changes and want hot-reloading:
+1. Start the backend: `cd server && node server.js`
+2. Start the frontend dev server: `cd client && npm run dev`
+3. Access the dev site at `http://localhost:5173`.
